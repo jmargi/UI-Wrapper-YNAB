@@ -1,0 +1,41 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Hybrid deployment: the app (backend + frontend) runs in containers, while
+# Ollama runs NATIVELY on the host so it can use the Mac's Metal GPU.
+#
+# Containers reach the host's Ollama via host.docker.internal (Docker Desktop)
+# or host.containers.internal (Podman). The extra_hosts entry makes this work
+# on Linux too.
+#
+# Start native Ollama first:   brew services start ollama
+# Then:                        docker compose up --build
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "3001:3001"
+    env_file:
+      - ./backend/.env
+    environment:
+      # Point the containerized backend at the host's native Ollama.
+      OLLAMA_HOST: http://host.docker.internal:11434
+      PORT: 3001
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ynab-data:/app/data
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    environment:
+      # Vite dev-server proxies /api to the backend container.
+      VITE_API_TARGET: http://backend:3001
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  ynab-data:

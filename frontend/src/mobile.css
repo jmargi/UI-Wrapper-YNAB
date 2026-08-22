@@ -1,0 +1,189 @@
+/* Mobile-responsiveness shims applied across all pages.
+   Breakpoint matches Mantine's default `sm` (48em / 768px). */
+
+/* ── Global (all viewports) ─────────────────────────────────────────────────
+   The toast container is a fixed, invisible, near-full-width layer at the top
+   of the screen. It must NEVER swallow taps — only the toasts themselves are
+   interactive. Without this, a toast lingering mid-animation (common after iOS
+   resumes a backgrounded PWA) silently blocks every tap underneath it: nav
+   drawer links, buttons, whole swaths of the page. */
+.mantine-Notifications-root {
+  pointer-events: none !important;
+}
+.mantine-Notifications-root .mantine-Notification-root {
+  pointer-events: all;
+}
+
+/* The page itself must never pan sideways. Wide content (tables, charts)
+   scrolls inside its own container instead. */
+html, body {
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
+}
+
+/* Portrait-only on phones: iOS ignores the manifest's "orientation" field, so
+   enforce it ourselves — phone-sized landscape gets a rotate-back screen
+   instead of a broken layout. (max-height 500px excludes iPads/desktops.) */
+@media screen and (orientation: landscape) and (max-height: 500px) {
+  body::after {
+    content: 'Rotate your phone back to portrait 📱';
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #1A1B1E;
+    color: #aaa;
+    font-size: 1.05rem;
+    text-align: center;
+    padding: 2rem;
+  }
+}
+
+@media (max-width: 48em) {
+  /* Tighter horizontal padding so content doesn't waste 20%+ of screen width.
+     Leave top/bottom alone — Mantine sets top to clear the fixed header. */
+  .mantine-AppShell-main {
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+  }
+
+  /* iOS auto-zooms on any input whose font-size is < 16px. Force 16px on every
+     editable field on mobile to suppress the zoom while preserving pinch-zoom. */
+  input, textarea, select,
+  .mantine-Input-input,
+  .mantine-Textarea-input,
+  .mantine-Select-input,
+  .mantine-NumberInput-input,
+  .mantine-PinInput-input,
+  .mantine-PasswordInput-input,
+  .mantine-DateInput-input,
+  .mantine-DatePickerInput-input,
+  .mantine-MonthPickerInput-input {
+    font-size: 16px !important;
+  }
+
+  /* Tables: shrink text; pages wrap their own tables in scroll containers where
+     needed (touching <table> display breaks column alignment). */
+  .mantine-Table-table {
+    font-size: 0.8125rem;
+  }
+
+  /* Shrink heading sizes — order-1/2 titles overflow narrow viewports */
+  .mantine-Title-root[data-order="1"] { font-size: 1.5rem; }
+  .mantine-Title-root[data-order="2"] { font-size: 1.25rem; }
+  .mantine-Title-root[data-order="3"] { font-size: 1.05rem; }
+
+  /* Cards: a touch less padding */
+  .mantine-Card-root,
+  .mantine-Paper-root {
+    padding: 0.75rem;
+  }
+
+  /* Tabs: let labels wrap or scroll instead of overflowing */
+  .mantine-Tabs-list {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .mantine-Tabs-tab {
+    flex-shrink: 0;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.85rem;
+  }
+
+  /* Prevent any unwrapped Group with explicit nowrap from forcing horizontal scroll
+     on the whole page. Only applies where Mantine adds the data attr. */
+  .mantine-Group-root[data-wrap="nowrap"] {
+    min-width: 0;
+  }
+
+  /* Recharts containers — let them shrink. Default ResponsiveContainer assumes parent has width. */
+  .recharts-responsive-container,
+  .mantine-Chart-root {
+    max-width: 100%;
+  }
+
+  /* Tighter vertical rhythm — page-level Stacks default to 1rem gaps which
+     adds up to a LOT of scrolling on a phone. */
+  .mantine-AppShell-main > .mantine-Stack-root {
+    --stack-gap: 0.6rem;
+  }
+
+  /* Bigger touch targets for icon buttons in lists/tables */
+  .mantine-Table-table .mantine-ActionIcon-root {
+    min-width: 32px;
+    min-height: 32px;
+  }
+
+  /* iOS niceties: no grey tap flash, no text-size inflation in landscape */
+  * { -webkit-tap-highlight-color: transparent; }
+  html { -webkit-text-size-adjust: 100%; }
+
+  /* Full-screen modals (category picker, etc.): the app uses viewport-fit=cover,
+     so without this the header — and its ✕ — sits under the iPhone status bar /
+     notch. Push the header down into the safe area and keep it sticky. */
+  .mantine-Modal-content[data-full-screen] .mantine-Modal-header {
+    padding-top: max(0.75rem, env(safe-area-inset-top));
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }
+
+  /* The modal ✕ becomes a proper 44×44pt Apple-HIG touch target */
+  .mantine-Modal-close {
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px !important;
+    min-height: 44px !important;
+  }
+  .mantine-Modal-close svg {
+    width: 22px !important;
+    height: 22px !important;
+  }
+
+  /* Toasts shouldn't slide under the notch either */
+  .mantine-Notifications-root {
+    top: calc(env(safe-area-inset-top) + 8px) !important;
+  }
+
+  /* Regular (non-fullscreen) modals become bottom sheets on phones: full
+     width, pinned to the bottom of the screen where the thumb lives, rounded
+     top corners, capped height with internal scrolling. */
+  .mantine-Modal-inner {
+    padding: 0 !important;
+    align-items: flex-end !important;
+  }
+  .mantine-Modal-content:not([data-full-screen]) {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 90dvh;
+    border-radius: 16px 16px 0 0;
+    margin: 0;
+  }
+  .mantine-Modal-content:not([data-full-screen]) .mantine-Modal-body {
+    padding-bottom: calc(1rem + env(safe-area-inset-bottom));
+  }
+}
+
+/* Clearance for the fixed mobile bottom tab bar (must come after the
+   standalone-PWA rules below/above so it wins the padding-bottom cascade). */
+@media (max-width: 48em) {
+  .mantine-AppShell-main {
+    padding-bottom: calc(3.75rem + env(safe-area-inset-bottom)) !important;
+  }
+}
+
+/* Safe-area insets only matter when the app is launched as a standalone PWA
+   (iOS Home Screen). Scoped so it never affects regular browser layouts. */
+@media (display-mode: standalone) {
+  .mantine-AppShell-header {
+    padding-top: env(safe-area-inset-top);
+  }
+  .mantine-AppShell-main {
+    padding-left:   max(var(--mantine-spacing-md), env(safe-area-inset-left));
+    padding-right:  max(var(--mantine-spacing-md), env(safe-area-inset-right));
+    padding-bottom: max(var(--mantine-spacing-md), env(safe-area-inset-bottom));
+  }
+}
