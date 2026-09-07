@@ -4,6 +4,7 @@ import {
 } from '@mantine/core';
 import {
   IconChartBar, IconScale, IconHistory, IconReportAnalytics, IconInfoCircle,
+  IconBulb,
 } from '@tabler/icons-react';
 import { notifications } from '@mantine/notifications';
 import { api } from '../context/YNABContext';
@@ -12,9 +13,17 @@ import {
   SplitHistoryTab,
   MonthlyBudgetSummaryCard,
 } from './RulesPage';
+import BudgetRecommendationsTab from './BudgetRecommendationsTab';
 
 // Registry of available reports. Add new reports here and they appear in the picker.
 const REPORTS = [
+  {
+    value: 'budget-recommendations',
+    label: 'Budget Recommendations',
+    description: 'Where to increase budgets based on your actual spend over the last 30/60/90 days.',
+    icon: IconBulb,
+    color: 'orange',
+  },
   {
     value: 'budget-vs-actual',
     label: 'Budget vs Actual',
@@ -39,7 +48,7 @@ const REPORTS = [
 ];
 
 export default function ReportsPage() {
-  const [selected, setSelected] = useState('budget-vs-actual');
+  const [selected, setSelected] = useState('budget-recommendations');
 
   // profiles only needed for the income report
   const [profiles, setProfiles]   = useState([]);
@@ -58,6 +67,8 @@ export default function ReportsPage() {
 
   const renderReport = () => {
     switch (selected) {
+      case 'budget-recommendations':
+        return <BudgetRecommendationsTab />;
       case 'budget-vs-actual':
         return <BudgetVsActualTab />;
       case 'split-history':
