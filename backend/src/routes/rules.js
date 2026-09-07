@@ -66,6 +66,41 @@ router.delete('/hidden-categories/:categoryId', (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Manual income assignments — mark an income transaction "assigned" locally
+// without allocating any money. Never written to YNAB.
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/manual-assignments', (req, res) => {
+  try {
+    const db   = getDb();
+    const rows = db.prepare('SELECT transaction_id FROM manual_income_assignments').all();
+    res.json(rows.map(r => r.transaction_id));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/manual-assignments/:txnId', (req, res) => {
+  try {
+    const db = getDb();
+    db.prepare(`INSERT OR IGNORE INTO manual_income_assignments (transaction_id, assigned_at)
+                VALUES (?, datetime('now'))`).run(req.params.txnId);
+    res.json({ transaction_id: req.params.txnId, assigned: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/manual-assignments/:txnId', (req, res) => {
+  try {
+    const db = getDb();
+    db.prepare('DELETE FROM manual_income_assignments WHERE transaction_id = ?').run(req.params.txnId);
+    res.json({ transaction_id: req.params.txnId, assigned: false });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Split History (must be declared BEFORE /:id to avoid route collisions)
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/split-history', async (req, res) => {

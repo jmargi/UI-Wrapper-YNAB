@@ -902,6 +902,35 @@ function Last30IncomeCard({ profiles, onLoadRules, onAllocateTotal, onOpenSplits
   // Profile picker — shown when a deposit has no auto-matched profile
   const [pickerOpen,    { open: openPicker, close: closePicker }] = useDisclosure(false);
   const [pendingTxn,    setPendingTxn]    = useState(null);
+  // Income txns manually checked off as "assigned" with no allocation (local-only)
+  const [manualAssigned, setManualAssigned] = useState(new Set());
+
+  useEffect(() => {
+    api.get('/rules/manual-assignments')
+      .then(r => setManualAssigned(new Set(r.data ?? [])))
+      .catch(() => {});
+  }, []);
+
+  // Toggle the local "assigned, no allocation" marker for a transaction.
+  // Never touches YNAB — no money moved, deposit left as-is.
+  const toggleManualAssigned = async (txnId, next) => {
+    setManualAssigned(prev => {                 // optimistic
+      const s = new Set(prev);
+      next ? s.add(txnId) : s.delete(txnId);
+      return s;
+    });
+    try {
+      if (next) await api.put(`/rules/manual-assignments/${txnId}`);
+      else      await api.delete(`/rules/manual-assignments/${txnId}`);
+    } catch (err) {
+      setManualAssigned(prev => {               // revert on error
+        const s = new Set(prev);
+        next ? s.delete(txnId) : s.add(txnId);
+        return s;
+      });
+      notifications.show({ title: 'Error', message: err.message, color: 'red' });
+    }
+  };
 
   const refreshToBeAssigned = () => {
     if (!activeBudgetId) return;
@@ -949,8 +978,16 @@ function Last30IncomeCard({ profiles, onLoadRules, onAllocateTotal, onOpenSplits
       (p) => p.payeeMatch && txn.payee_name?.toLowerCase().includes(p.payeeMatch.toLowerCase())
     );
 
-  // A transaction is "assigned" if this app applied splits ([Budget App] memo) OR it's approved with a real category
+  // A transaction is "assigned" if the user manually checked it off (local marker),
+  // OR this app applied splits ([Budget App] memo), OR it's approved with a real category
   const isAssigned = (t) =>
+    manualAssigned.has(t.id) ||
+    t.memo?.startsWith('[Budget App') ||
+    (t.approved && t.category_id && !t.category_name?.toLowerCase().includes('ready to assign'));
+
+  // Assigned specifically via money movement (allocation / splits / real category) —
+  // i.e. NOT the local no-allocation checkmark. Used to lock the checkbox.
+  const isAssignedByAllocation = (t) =>
     t.memo?.startsWith('[Budget App') ||
     (t.approved && t.category_id && !t.category_name?.toLowerCase().includes('ready to assign'));
 
@@ -962,7 +999,7 @@ function Last30IncomeCard({ profiles, onLoadRules, onAllocateTotal, onOpenSplits
         (assignFilter === 'unassigned' && !isAssigned(t));
       return typeOk && assignOk;
     });
-  }, [last30Income, typeFilter, assignFilter, profiles]);
+  }, [last30Income, typeFilter, assignFilter, profiles, manualAssigned]);
 
   const runningTotal = filtered.reduce((s, t) => s + t.amount, 0) / 1000;
   const ynabTotal    = toBeAssigned !== null ? toBeAssigned / 1000 : null;
@@ -1091,6 +1128,8 @@ function Last30IncomeCard({ profiles, onLoadRules, onAllocateTotal, onOpenSplits
               const splitsApplied = txn.memo?.startsWith('[Budget App');
               const isUnallocated = !txn.approved || !txn.category_id;
               const assigned      = isAssigned(txn);
+              const lockedByAllocation = isAssignedByAllocation(txn); // assigned via money movement
+              const manuallyChecked    = manualAssigned.has(txn.id);  // local no-allocation marker
 
               return (
                 <Box
@@ -1140,6 +1179,24 @@ function Last30IncomeCard({ profiles, onLoadRules, onAllocateTotal, onOpenSplits
                     {/* Right: amount, status badge, action button */}
                     <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0, marginLeft: 'auto' }}>
                       <Text fw={700} c="teal" size="md">{formatCurrency(txn.amount)}</Text>
+
+                      {/* Check off as assigned — no money moved, local marker only */}
+                      <Tooltip
+                        withArrow
+                        label={lockedByAllocation
+                          ? 'Assigned via allocation — undo from the Allocate / Apply Splits action'
+                          : manuallyChecked
+                            ? 'Checked off as assigned (no money allocated) — click to undo'
+                            : 'Mark as assigned without allocating money'}
+                      >
+                        <Checkbox
+                          size="xs"
+                          color="teal"
+                          checked={assigned}
+                          disabled={lockedByAllocation}
+                          onChange={(e) => toggleManualAssigned(txn.id, e.currentTarget.checked)}
+                        />
+                      </Tooltip>
 
                       {type === 'payroll' && (
                         splitsApplied
