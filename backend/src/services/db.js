@@ -92,6 +92,13 @@ function initSchema(db) {
       hidden_at   TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- Income transactions the user has manually checked off as "assigned"
+    -- without allocating money. Local-only marker — never written to YNAB.
+    CREATE TABLE IF NOT EXISTS manual_income_assignments (
+      transaction_id TEXT PRIMARY KEY,
+      assigned_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS category_feedback (
       id                    INTEGER PRIMARY KEY AUTOINCREMENT,
       transaction_id        TEXT,
