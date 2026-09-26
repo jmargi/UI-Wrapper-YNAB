@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import {
-  Popover, Button, Stack, Group, Text, NumberInput, Badge, UnstyledButton, Tooltip,
+  Popover, Button, Stack, Group, Text, NumberInput, Badge, UnstyledButton, Tooltip, Alert,
 } from '@mantine/core';
-import { IconAdjustmentsDollar, IconSparkles } from '@tabler/icons-react';
+import { IconAdjustmentsDollar, IconSparkles, IconAlertTriangle } from '@tabler/icons-react';
 import { api, useYNAB } from '../context/YNABContext';
 import { useCategorySpend, suggestBudget } from '../utils/categorySpend';
-import { applyMonthlyBudget } from '../utils/monthlyBudget';
+import { applyMonthlyBudget, checkPaycheckRoom } from '../utils/monthlyBudget';
 
 const fmt = (n) =>
   '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
@@ -48,6 +48,7 @@ export default function AdjustBudgetButton({ cat, currentMonthly, rangeAvg, rang
   const [opened, setOpened] = useState(false);
   const [value, setValue]   = useState(currentMonthly);
   const [saving, setSaving] = useState(false);
+  const [profiles, setProfiles] = useState(null); // income sources, loaded on open
 
   const auto = recommendMonthly(spendByCat[cat.id]);
   const rec  = primary ? { ...auto, amount: primary.amount, reason: primary.hint } : auto;
@@ -66,25 +67,40 @@ export default function AdjustBudgetButton({ cat, currentMonthly, rangeAvg, rang
     add('This report', suggestBudget(rangeAvg), `Avg ${fmt(rangeAvg)}/mo over ${rangeMonths} months`);
   if (rec.amount == null && currentMonthly > 0) add('Stop budgeting', 0, 'Nothing spent in 90 days');
 
+  const loadProfiles = async () => {
+    const data = (await api.get('/rules/profiles').catch(() => ({ data: null }))).data;
+    setProfiles(data);
+    return data;
+  };
+
   const open = () => {
     setValue(rec.amount ?? currentMonthly);
     setOpened(true);
+    loadProfiles();
   };
 
   const save = async () => {
     const dollars = Number(value);
-    if (!Number.isFinite(dollars) || dollars < 0) return;
+    if (!Number.isFinite(dollars) || dollars < 0 || blocked) return;
     setSaving(true);
     try {
-      const profiles = (await api.get('/rules/profiles').catch(() => ({ data: [] }))).data ?? [];
-      await applyMonthlyBudget({ cat, dollars, profiles, saveBudgetOverride });
-      setOpened(false);
+      // Re-read income sources so the paycheck check uses the latest splits.
+      const fresh = await loadProfiles();
+      if (!fresh) return; // couldn't verify paychecks — don't save blind
+      const ok = await applyMonthlyBudget({ cat, dollars, currentDollars: currentMonthly, profiles: fresh, saveBudgetOverride });
+      if (ok) setOpened(false);
     } finally {
       setSaving(false);
     }
   };
 
   const delta = Number(value) - currentMonthly;
+
+  // Live paycheck-room check for the amount currently selected.
+  const room = profiles
+    ? checkPaycheckRoom({ cat, dollars: Number(value) || 0, currentDollars: currentMonthly, profiles })
+    : null;
+  const blocked = !profiles || room.problems.length > 0;
 
   return (
     <Popover opened={opened} onChange={setOpened} width={300} position="bottom-end" withArrow shadow="md" trapFocus>
@@ -153,8 +169,25 @@ export default function AdjustBudgetButton({ cat, currentMonthly, rangeAvg, rang
             thousandSeparator=","
             value={value}
             onChange={setValue}
-            onKeyDown={(e) => e.key === 'Enter' && save()}
+            onKeyDown={(e) => e.key === 'Enter' && delta !== 0 && save()}
           />
+
+          {profiles === null && opened && (
+            <Text size="xs" c="dimmed">Checking paychecks…</Text>
+          )}
+          {room?.problems.length > 0 && (
+            <Alert color="red" variant="light" p="xs" icon={<IconAlertTriangle size={14} />}
+              title="Not enough room in the paycheck">
+              <Stack gap={2}>
+                {room.problems.map((x) => (
+                  <Text key={x.name} size="xs"><b>{x.name}</b>: {x.message}</Text>
+                ))}
+                <Text size="xs" c="dimmed">
+                  Pick a lower amount, or free up money in other splits on the Income page first.
+                </Text>
+              </Stack>
+            </Alert>
+          )}
 
           <Group justify="space-between" wrap="nowrap">
             <Text size="xs" c={delta > 0 ? 'orange' : delta < 0 ? 'teal' : 'dimmed'}>
@@ -164,7 +197,7 @@ export default function AdjustBudgetButton({ cat, currentMonthly, rangeAvg, rang
             </Text>
             <Group gap="xs">
               <Button size="xs" variant="default" onClick={() => setOpened(false)}>Cancel</Button>
-              <Button size="xs" color="teal" loading={saving} disabled={delta === 0} onClick={save}>
+              <Button size="xs" color="teal" loading={saving} disabled={delta === 0 || blocked} onClick={save}>
                 Save
               </Button>
             </Group>

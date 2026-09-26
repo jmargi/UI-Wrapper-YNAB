@@ -358,7 +358,7 @@ export function MonthlyBudgetCard({ profiles, onReload }) {
   const commitEdit = async (cat) => {
     const dollars = parseFloat(draft);
     if (isNaN(dollars)) { setEditingId(null); return; }
-    await applyMonthlyBudget({ cat, dollars, profiles, saveBudgetOverride, onReload });
+    await applyMonthlyBudget({ cat, dollars, currentDollars: effectiveMonthly(cat), profiles, saveBudgetOverride, onReload });
     setEditingId(null);
   };
 
