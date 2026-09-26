@@ -20,6 +20,8 @@ import { api, useYNAB } from '../context/YNABContext';
 import DateRangeFilter from '../components/DateRangeFilter';
 import CategoryPicker from '../components/CategoryPicker';
 import { formatCurrency, formatDate } from '../utils/format';
+import { applyMonthlyBudget } from '../utils/monthlyBudget';
+import AdjustBudgetButton from '../components/AdjustBudgetButton';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants & helpers
@@ -355,59 +357,7 @@ export function MonthlyBudgetCard({ profiles, onReload }) {
   const commitEdit = async (cat) => {
     const dollars = parseFloat(draft);
     if (isNaN(dollars)) { setEditingId(null); return; }
-    // Persist to SQLite via API — YNAB is NOT written to.
-    await saveBudgetOverride(cat.id, Math.round(dollars * 1000));
-
-      // ── Auto-recalculate per-check splits in all profiles that use this category ──
-      // SAFETY: never overwrite a good split value with $0 — skip if new monthly is 0
-      try {
-        if (dollars <= 0) throw new Error('skip — $0 monthly would zero out splits');
-
-        const CHECKS_PER_SOURCE = 2;
-        const numSources = (profiles?.length ?? 1) || 1;
-        const perCheckDivisor = numSources * CHECKS_PER_SOURCE;
-        const newPerCheck = parseFloat((dollars / perCheckDivisor).toFixed(2));
-
-        if (newPerCheck <= 0) throw new Error('skip — per-check would be $0');
-
-        const affected = (profiles ?? []).filter((p) =>
-          (p.defaultSplits ?? []).some((s) => s.categoryId === cat.id)
-        );
-
-        for (const p of affected) {
-          const updatedSplits = (p.defaultSplits ?? []).map((s) =>
-            s.categoryId === cat.id ? { ...s, value: newPerCheck } : s
-          );
-          // Safety: never add or remove splits
-          if (updatedSplits.length !== (p.defaultSplits ?? []).length) continue;
-          console.log('[auto-recalc]', p.name, 'before:', p.defaultSplits, 'after:', updatedSplits);
-          await api.put(`/rules/profiles/${p.id}`, { ...p, defaultSplits: updatedSplits });
-        }
-
-        if (affected.length > 0) {
-          notifications.show({
-            title: 'Splits auto-updated',
-            message: `${cat.name} → $${newPerCheck.toFixed(2)}/check across ${affected.length} source${affected.length !== 1 ? 's' : ''}: ${affected.map((p) => p.name).join(', ')}`,
-            color: 'blue',
-            autoClose: 4000,
-          });
-          onReload?.();
-        }
-      } catch (recalcErr) {
-        console.error('[auto-recalc] Error:', recalcErr);
-        notifications.show({
-          title: 'Budget saved, but split recalc failed',
-          message: recalcErr.message,
-          color: 'orange',
-        });
-      }
-
-    notifications.show({
-      title: `${cat.name} saved`,
-      message: `Monthly reference set to $${dollars.toFixed(2)}/mo — saved to database, not sent to YNAB`,
-      color: 'teal',
-      autoClose: 3000,
-    });
+    await applyMonthlyBudget({ cat, dollars, profiles, saveBudgetOverride, onReload });
     setEditingId(null);
   };
 
@@ -3270,14 +3220,13 @@ function getMonthsInRange(start, end) {
 }
 
 export function BudgetVsActualTab() {
-  const { activeBudgetId } = useYNAB();
+  const { activeBudgetId, budgetOverrides: overrides } = useYNAB();
   const now = new Date();
 
   const [bvaDateRange,    setBvaDateRange]    = useState(() => {
     return [new Date(now.getFullYear(), now.getMonth(), 1),
             new Date(now.getFullYear(), now.getMonth() + 1, 0)];
   });
-  const [overrides,       setOverrides]       = useState({});
   const [rangeData,       setRangeData]       = useState(null); // { months[], monthlyData[][] }
   const [loading,         setLoading]         = useState(false);
   const [lastSynced,      setLastSynced]      = useState(null);
@@ -3309,12 +3258,10 @@ export function BudgetVsActualTab() {
     }
   }, [activeBudgetId]);
 
-  // Load BvA tracking + overrides on mount, then fetch initial range
+  // Load BvA tracking on mount. Monthly budget overrides come from context so
+  // edits made with the Adjust button show up immediately.
   useEffect(() => {
     api.get('/rules/bva-tracking').then(r => setBvaTracking(r.data ?? {})).catch(() => {});
-    api.get('/rules/budget-overrides').then(r => {
-      setOverrides(r.data ?? {});
-    }).catch(() => {});
   }, []);
 
   // Fetch whenever activeBudgetId or dateRange changes
@@ -3342,11 +3289,14 @@ export function BudgetVsActualTab() {
         .forEach(c => {
           if (!catMap[c.id]) {
             catMap[c.id] = { id: c.id, name: c.name, groupName: c.category_group_name,
-                             totalActivity: 0, latestBalance: 0, ynabBudgetedSum: 0 };
+                             totalActivity: 0, latestBalance: 0, ynabBudgetedSum: 0, latestBudgeted: 0 };
           }
           catMap[c.id].totalActivity   += Math.abs(c.activity ?? 0);
           catMap[c.id].ynabBudgetedSum += Math.abs(c.budgeted  ?? 0);
-          if (idx === lastIdx) catMap[c.id].latestBalance = c.balance ?? 0;
+          if (idx === lastIdx) {
+            catMap[c.id].latestBalance  = c.balance ?? 0;
+            catMap[c.id].latestBudgeted = Math.abs(c.budgeted ?? 0);
+          }
         });
     });
 
@@ -3366,6 +3316,7 @@ export function BudgetVsActualTab() {
           id:      c.id,
           name:    c.name,
           monthly: budget,
+          perMonth: override != null ? Math.abs(override) / 1000 : c.latestBudgeted / 1000,
           spent:   c.totalActivity  / 1000,
           balance: c.latestBalance  / 1000,
         });
@@ -3394,7 +3345,39 @@ export function BudgetVsActualTab() {
   const fmt = (n) => '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const numMonths   = rangeData?.months?.length ?? 1;
-  const budgetLabel = numMonths === 1 ? 'Monthly Budget' : `Budget (${numMonths} mo)`;
+  const budgetLabel = numMonths === 1 ? 'Budget' : `Budget (${numMonths} mo)`;
+  const rangeText   = numMonths === 1 ? 'this month' : `these ${numMonths} months`;
+
+  const barColor = (spent, budget) =>
+    budget <= 0 ? 'gray' : spent > budget ? 'red' : spent / budget > 0.8 ? 'orange' : 'teal';
+
+  const COLS = [
+    { key: 'budget', label: budgetLabel,
+      tip: numMonths === 1
+        ? 'What you planned to spend this month (your monthly budget from the Budget page, or YNAB\'s assigned amount if none is set)'
+        : `Your monthly budget × ${numMonths} months — what you planned to spend across the selected dates` },
+    { key: 'spent', label: 'Spent',
+      tip: 'Money actually spent from this category in the selected dates' },
+    { key: 'left', label: 'Left / Over',
+      tip: 'Budget minus Spent. Green = still under budget, red = spent more than planned' },
+    { key: 'avail', label: 'YNAB balance',
+      tip: 'The category\'s Available balance in YNAB at the end of the range — includes money rolled over from earlier months, so it can differ from Left/Over' },
+  ];
+
+  const HeaderCell = ({ label, tip }) => (
+    <Tooltip label={tip} multiline w={260} withArrow>
+      <Group gap={3} justify="flex-end" wrap="nowrap" style={{ flex: 1, cursor: 'help', whiteSpace: 'nowrap' }}>
+        <Text size="xs" fw={700} ta="right">{label}</Text>
+        <IconInfoCircle size={11} style={{ opacity: 0.5, flexShrink: 0 }} />
+      </Group>
+    </Tooltip>
+  );
+
+  const leftText = (budget, spent) => {
+    if (budget <= 0) return spent > 0 ? 'No budget' : '—';
+    const diff = budget - spent;
+    return diff >= 0 ? `${fmt(diff)} left` : `${fmt(diff)} over`;
+  };
 
   return (
     <Stack gap="md">
@@ -3428,76 +3411,113 @@ export function BudgetVsActualTab() {
         </Button>
       </Group>
 
+      {/* What am I looking at? */}
+      <Alert variant="light" color="blue" icon={<IconInfoCircle size={16} />} p="sm">
+        <Text size="sm">
+          Did you stay within budget {rangeText}? Each row compares what you <b>planned</b> to spend
+          (Budget) with what you <b>actually spent</b>. The bar fills as you spend: teal is on track,
+          orange is over 80%, red means you went over.
+        </Text>
+        <Text size="xs" c="dimmed" mt={4}>
+          Use the button at the end of a row to change that category's monthly budget. An orange
+          amount means your recent spending suggests a different budget; click it to see why.
+        </Text>
+      </Alert>
+
       {/* Table — scrolls horizontally on narrow viewports so columns stay legible */}
       <Card withBorder radius="md" p={0} style={{ overflowX: 'auto' }}>
-       <div style={{ minWidth: 640 }}>
+       <div style={{ minWidth: 820 }}>
         {/* Column headers */}
         <Group
-          px="md" py="xs" gap={0}
-          style={{ background: 'var(--mantine-color-gray-0)', borderBottom: '1px solid var(--mantine-color-gray-2)' }}
+          px="md" py="xs" gap={0} wrap="nowrap"
+          style={{ background: 'var(--mantine-color-default-hover)', borderBottom: '1px solid var(--mantine-color-default-border)' }}
         >
-          <Text size="xs" fw={700} style={{ flex: 3 }}>Category</Text>
-          <Text size="xs" fw={700} ta="right" style={{ flex: 1 }}>{budgetLabel}</Text>
-          <Text size="xs" fw={700} ta="right" style={{ flex: 1 }}>Spent</Text>
-          <Text size="xs" fw={700} ta="right" style={{ flex: 1 }}>Available</Text>
-          <Text size="xs" fw={700} ta="right" style={{ flex: 1 }}>% Spent</Text>
+          <Text size="xs" fw={700} style={{ flex: 2.5 }}>Category</Text>
+          {COLS.map(c => <HeaderCell key={c.key} label={c.label} tip={c.tip} />)}
+          <Text size="xs" fw={700} ta="right" style={{ width: 104, flexShrink: 0 }}>Monthly budget</Text>
         </Group>
 
         {grouped.map(({ group, cats, totalMonthly, totalSpent, totalBalance }) => {
           const isCollapsed = !!collapsedGroups[group];
+          const groupOver   = totalMonthly > 0 && totalSpent > totalMonthly;
           return (
             <div key={group}>
               {/* Group header row */}
               <Group
-                px="md" py={6} gap={0}
+                px="md" py={6} gap={0} wrap="nowrap"
                 style={{
                   cursor: 'pointer',
-                  background: 'var(--mantine-color-gray-1)',
-                  borderBottom: '1px solid var(--mantine-color-gray-2)',
+                  background: 'var(--mantine-color-default-hover)',
+                  borderBottom: '1px solid var(--mantine-color-default-border)',
                 }}
                 onClick={() => toggleGroup(group)}
               >
-                <Group gap={6} style={{ flex: 3 }}>
+                <Group gap={6} style={{ flex: 2.5 }}>
                   {isCollapsed ? <IconChevronRight size={12} /> : <IconChevronDown size={12} />}
                   <Text size="xs" fw={700}>{group}</Text>
                   <Badge size="xs" variant="outline" color="gray">{cats.length}</Badge>
                 </Group>
-                <Text size="xs" fw={600} ta="right" style={{ flex: 1 }}>{fmt(totalMonthly)}</Text>
-                <Text size="xs" fw={600} ta="right"
-                  c={totalMonthly > 0 && totalSpent > totalMonthly ? 'red' : 'green'}
-                  style={{ flex: 1 }}>
+                <Text size="xs" fw={600} ta="right" style={{ flex: 1, whiteSpace: 'nowrap' }}>{fmt(totalMonthly)}</Text>
+                <Text size="xs" fw={600} ta="right" c={groupOver ? 'red' : undefined} style={{ flex: 1, whiteSpace: 'nowrap' }}>
                   {fmt(totalSpent)}
                 </Text>
-                <Text size="xs" fw={600} ta="right" c={totalBalance < 0 ? 'red' : undefined} style={{ flex: 1 }}>{fmt(totalBalance)}</Text>
-                <Text size="xs" fw={600} ta="right"
-                  c={totalMonthly > 0 && totalSpent > totalMonthly ? 'red' : 'dimmed'}
-                  style={{ flex: 1 }}>
-                  {totalMonthly > 0 ? `${Math.round((totalSpent / totalMonthly) * 100)}%` : '—'}
+                <Text size="xs" fw={600} ta="right" c={totalMonthly <= 0 ? 'dimmed' : groupOver ? 'red' : 'teal'} style={{ flex: 1, whiteSpace: 'nowrap' }}>
+                  {leftText(totalMonthly, totalSpent)}
                 </Text>
+                <Text size="xs" fw={600} ta="right" c={totalBalance < 0 ? 'red' : 'dimmed'} style={{ flex: 1, whiteSpace: 'nowrap' }}>
+                  {totalBalance < 0 ? '−' : ''}{fmt(totalBalance)}
+                </Text>
+                <div style={{ width: 104, flexShrink: 0 }} />
               </Group>
 
               {/* Category rows */}
               {!isCollapsed && cats.map((cat) => {
-                const overBudget  = cat.monthly > 0 && cat.spent > cat.monthly;
-                const spentVsMo   = cat.monthly != null ? cat.monthly - cat.spent : null;
-                const pct         = cat.monthly > 0 ? Math.round((cat.spent / cat.monthly) * 100) : null;
+                const overBudget = cat.monthly > 0 && cat.spent > cat.monthly;
+                const rawPct     = cat.monthly > 0 ? (cat.spent / cat.monthly) * 100 : 0;
                 return (
-                  <Group
-                    key={cat.id} px="md" py={5} gap={0}
-                    style={{ borderBottom: '1px solid var(--mantine-color-gray-1)' }}
+                  <Box
+                    key={cat.id} px="md" py={6}
+                    style={{ borderBottom: '1px solid var(--mantine-color-default-border)' }}
                   >
-                    <Text size="sm" style={{ flex: 3 }} pl={20}>{cat.name}</Text>
-                    <Text size="sm" ta="right" c="dimmed" style={{ flex: 1 }}>
-                      {cat.monthly != null ? fmt(cat.monthly) : '—'}
-                    </Text>
-                    <Text size="sm" ta="right" c={overBudget ? 'red' : 'green'} style={{ flex: 1 }}>
-                      {cat.spent > 0 ? fmt(cat.spent) : '—'}
-                    </Text>
-                    <Text size="sm" ta="right" c={cat.balance < 0 ? 'red' : cat.balance === 0 ? 'dimmed' : 'teal'} style={{ flex: 1 }}>{fmt(cat.balance)}</Text>
-                    <Text size="xs" ta="right" c={pct != null && pct > 100 ? 'red' : 'dimmed'} style={{ flex: 1 }}>
-                      {pct != null ? `${pct}%` : '—'}
-                    </Text>
-                  </Group>
+                    <Group gap={0} wrap="nowrap" align="flex-start">
+                      <Box style={{ flex: 2.5, minWidth: 0 }} pl={20} pr="md">
+                        <Text size="sm" lineClamp={1}>{cat.name}</Text>
+                        <Progress
+                          mt={4}
+                          size="xs"
+                          value={Math.min(100, rawPct)}
+                          color={barColor(cat.spent, cat.monthly)}
+                          aria-label={`${cat.name}: ${Math.round(rawPct)}% of budget spent`}
+                        />
+                        <Text size="10px" c={overBudget ? 'red' : 'dimmed'} mt={2}>
+                          {cat.monthly > 0
+                            ? `${Math.round(rawPct)}% of budget used`
+                            : cat.spent > 0 ? 'Spent with no budget set' : 'No budget, no spending'}
+                        </Text>
+                      </Box>
+                      <Text size="sm" ta="right" c="dimmed" style={{ flex: 1, whiteSpace: 'nowrap' }}>
+                        {cat.monthly > 0 ? fmt(cat.monthly) : '—'}
+                      </Text>
+                      <Text size="sm" ta="right" c={overBudget ? 'red' : undefined} style={{ flex: 1, whiteSpace: 'nowrap' }}>
+                        {cat.spent > 0 ? fmt(cat.spent) : '—'}
+                      </Text>
+                      <Text size="sm" ta="right" fw={500}
+                        c={cat.monthly <= 0 ? 'dimmed' : overBudget ? 'red' : 'teal'} style={{ flex: 1, whiteSpace: 'nowrap' }}>
+                        {leftText(cat.monthly, cat.spent)}
+                      </Text>
+                      <Text size="sm" ta="right" c={cat.balance < 0 ? 'red' : 'dimmed'} style={{ flex: 1, whiteSpace: 'nowrap' }}>
+                        {cat.balance < 0 ? '−' : ''}{fmt(cat.balance)}
+                      </Text>
+                      <Group justify="flex-end" style={{ width: 104, flexShrink: 0 }}>
+                        <AdjustBudgetButton
+                          cat={cat}
+                          currentMonthly={cat.perMonth}
+                          rangeAvg={cat.spent / numMonths}
+                          rangeMonths={numMonths}
+                        />
+                      </Group>
+                    </Group>
+                  </Box>
                 );
               })}
             </div>
@@ -3506,27 +3526,28 @@ export function BudgetVsActualTab() {
 
         {/* Grand total footer */}
         <Group
-          px="md" py="sm" gap={0}
+          px="md" py="sm" gap={0} wrap="nowrap"
           style={{
-            borderTop: '2px solid var(--mantine-color-gray-3)',
-            background: 'var(--mantine-color-gray-0)',
+            borderTop: '2px solid var(--mantine-color-default-border)',
+            background: 'var(--mantine-color-default-hover)',
           }}
         >
-          <Text size="sm" fw={700} style={{ flex: 3 }}>Total</Text>
-          <Text size="sm" fw={700} ta="right" style={{ flex: 1 }}>{fmt(grandTotals.monthly)}</Text>
+          <Text size="sm" fw={700} style={{ flex: 2.5 }}>Total</Text>
+          <Text size="sm" fw={700} ta="right" style={{ flex: 1, whiteSpace: 'nowrap' }}>{fmt(grandTotals.monthly)}</Text>
           <Text size="sm" fw={700} ta="right"
-            c={grandTotals.monthly > 0 && grandTotals.spent > grandTotals.monthly ? 'red' : 'green'}
-            style={{ flex: 1 }}>
+            c={grandTotals.monthly > 0 && grandTotals.spent > grandTotals.monthly ? 'red' : undefined}
+            style={{ flex: 1, whiteSpace: 'nowrap' }}>
             {fmt(grandTotals.spent)}
           </Text>
-          <Text size="sm" fw={700} ta="right" c={grandTotals.balance < 0 ? 'red' : 'teal'} style={{ flex: 1 }}>{fmt(grandTotals.balance)}</Text>
           <Text size="sm" fw={700} ta="right"
-            c={grandTotals.monthly > 0 && grandTotals.spent > grandTotals.monthly ? 'red' : 'dimmed'}
-            style={{ flex: 1 }}>
-            {grandTotals.monthly > 0
-              ? `${Math.round((grandTotals.spent / grandTotals.monthly) * 100)}%`
-              : '—'}
+            c={grandTotals.monthly <= 0 ? 'dimmed' : grandTotals.spent > grandTotals.monthly ? 'red' : 'teal'}
+            style={{ flex: 1, whiteSpace: 'nowrap' }}>
+            {leftText(grandTotals.monthly, grandTotals.spent)}
           </Text>
+          <Text size="sm" fw={700} ta="right" c={grandTotals.balance < 0 ? 'red' : 'dimmed'} style={{ flex: 1, whiteSpace: 'nowrap' }}>
+            {grandTotals.balance < 0 ? '−' : ''}{fmt(grandTotals.balance)}
+          </Text>
+          <div style={{ width: 104, flexShrink: 0 }} />
         </Group>
        </div>
       </Card>
