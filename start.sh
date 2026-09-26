@@ -2,6 +2,11 @@
 # Portable launcher — works from wherever the repo lives.
 cd "$(dirname "$0")"
 
+# On macOS, prefer Homebrew's keg-only node@20 over any newer default node.
+if command -v brew >/dev/null 2>&1 && [ -d "$(brew --prefix node@20 2>/dev/null)/bin" ]; then
+  export PATH="$(brew --prefix node@20)/bin:$PATH"
+fi
+
 if ! command -v pm2 >/dev/null 2>&1; then
   echo "❌  pm2 not found. Run ./setup.sh first."
   exit 1

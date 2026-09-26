@@ -439,9 +439,9 @@ export default function CategoriesPage() {
                     const activity   = cat.activity ?? 0;
                     const balance    = cat.balance  ?? 0;
                     const overBudget = balance < 0;
-                    const pct = budgeted > 0
-                      ? Math.min(100, Math.abs(activity / budgeted) * 100)
-                      : 0;
+                    const spent = Math.max(0, -activity);
+                    const rawPct = budgeted > 0 ? (spent / budgeted) * 100 : 0;
+                    const pct = Math.min(100, rawPct);
 
                     return (
                       <div key={cat.id}>
@@ -453,10 +453,16 @@ export default function CategoriesPage() {
                             )}
                           </Group>
                           <Group gap="md" wrap="nowrap" style={{ flexShrink: 0 }}>
-                            <Text size="xs" c="dimmed" ta="right">{formatCurrency(budgeted)}</Text>
-                            <Text size="xs" fw={600} c={overBudget ? 'red' : 'teal'} ta="right" style={{ minWidth: 60 }}>
-                              {formatCurrency(balance)}
-                            </Text>
+                            <div style={{ textAlign: 'right' }}>
+                              <Text size="10px" c="dimmed" lh={1}>Budgeted</Text>
+                              <Text size="xs" c="dimmed">{formatCurrency(budgeted)}</Text>
+                            </div>
+                            <div style={{ textAlign: 'right', minWidth: 60 }}>
+                              <Text size="10px" c="dimmed" lh={1}>Balance</Text>
+                              <Text size="xs" fw={600} c={overBudget ? 'red' : 'teal'}>
+                                {formatCurrency(balance)}
+                              </Text>
+                            </div>
 
                             {/* Action menu */}
                             <Menu shadow="md" width={180} withinPortal position="bottom-end">
@@ -493,7 +499,24 @@ export default function CategoriesPage() {
                           value={pct}
                           color={overBudget ? 'red' : pct > 80 ? 'orange' : 'teal'}
                           size="xs"
+                          aria-label={`${cat.name}: ${Math.round(rawPct)}% of budget spent`}
                         />
+                        <Group justify="space-between" mt={2} wrap="nowrap">
+                          <Text size="10px" c="dimmed">
+                            {budgeted > 0
+                              ? `Spent ${formatCurrency(spent)} of ${formatCurrency(budgeted)}`
+                              : spent > 0
+                                ? `Spent ${formatCurrency(spent)} · nothing budgeted`
+                                : 'Nothing budgeted'}
+                          </Text>
+                          {budgeted > 0 && (
+                            <Text size="10px" fw={600} c={overBudget ? 'red' : pct > 80 ? 'orange' : 'dimmed'}>
+                              {overBudget
+                                ? `Over by ${formatCurrency(-balance)}`
+                                : `${Math.round(rawPct)}% used`}
+                            </Text>
+                          )}
+                        </Group>
                       </div>
                     );
                   })}
