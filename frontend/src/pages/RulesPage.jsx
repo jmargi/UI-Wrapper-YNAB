@@ -22,6 +22,7 @@ import CategoryPicker from '../components/CategoryPicker';
 import { formatCurrency, formatDate } from '../utils/format';
 import { applyMonthlyBudget } from '../utils/monthlyBudget';
 import AdjustBudgetButton from '../components/AdjustBudgetButton';
+import ColumnHeader from '../components/ColumnHeader';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants & helpers
@@ -3364,15 +3365,6 @@ export function BudgetVsActualTab() {
       tip: 'The category\'s Available balance in YNAB at the end of the range — includes money rolled over from earlier months, so it can differ from Left/Over' },
   ];
 
-  const HeaderCell = ({ label, tip }) => (
-    <Tooltip label={tip} multiline w={260} withArrow>
-      <Group gap={3} justify="flex-end" wrap="nowrap" style={{ flex: 1, cursor: 'help', whiteSpace: 'nowrap' }}>
-        <Text size="xs" fw={700} ta="right">{label}</Text>
-        <IconInfoCircle size={11} style={{ opacity: 0.5, flexShrink: 0 }} />
-      </Group>
-    </Tooltip>
-  );
-
   const leftText = (budget, spent) => {
     if (budget <= 0) return spent > 0 ? 'No budget' : '—';
     const diff = budget - spent;
@@ -3433,7 +3425,7 @@ export function BudgetVsActualTab() {
           style={{ background: 'var(--mantine-color-default-hover)', borderBottom: '1px solid var(--mantine-color-default-border)' }}
         >
           <Text size="xs" fw={700} style={{ flex: 2.5 }}>Category</Text>
-          {COLS.map(c => <HeaderCell key={c.key} label={c.label} tip={c.tip} />)}
+          {COLS.map(c => <ColumnHeader key={c.key} label={c.label} tip={c.tip} />)}
           <Text size="xs" fw={700} ta="right" style={{ width: 104, flexShrink: 0 }}>Monthly budget</Text>
         </Group>
 

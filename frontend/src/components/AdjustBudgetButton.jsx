@@ -37,16 +37,21 @@ const worthChanging = (rec, current) =>
  *   currentMonthly — current monthly budget in dollars
  *   rangeAvg       — optional avg spend/month over the report's date range
  *   rangeMonths    — number of months that avg covers
+ *   primary        — optional { label, amount, hint } that overrides the
+ *                    built-in recommendation (e.g. a report's own suggestion)
+ *   quiet          — never highlight the button as a suggestion (e.g. savings
+ *                    categories, where low spending is expected)
  */
-export default function AdjustBudgetButton({ cat, currentMonthly, rangeAvg, rangeMonths }) {
+export default function AdjustBudgetButton({ cat, currentMonthly, rangeAvg, rangeMonths, primary, quiet }) {
   const { saveBudgetOverride } = useYNAB();
   const spendByCat = useCategorySpend();
   const [opened, setOpened] = useState(false);
   const [value, setValue]   = useState(currentMonthly);
   const [saving, setSaving] = useState(false);
 
-  const rec = recommendMonthly(spendByCat[cat.id]);
-  const suggest = worthChanging(rec.amount, currentMonthly);
+  const auto = recommendMonthly(spendByCat[cat.id]);
+  const rec  = primary ? { ...auto, amount: primary.amount, reason: primary.hint } : auto;
+  const suggest = !quiet && worthChanging(rec.amount, currentMonthly);
 
   // Quick-pick options, deduped by amount. First one is the recommendation.
   const options = [];
@@ -54,7 +59,7 @@ export default function AdjustBudgetButton({ cat, currentMonthly, rangeAvg, rang
     if (amount == null || options.some((o) => o.amount === amount)) return;
     options.push({ label, amount, hint, recommended });
   };
-  if (rec.amount != null) add('Recommended', rec.amount, rec.reason, true);
+  if (rec.amount != null) add(primary?.label ?? 'Recommended', rec.amount, rec.reason, true);
   if (rec.avg30 > 0) add('Last 30 days', suggestBudget(rec.avg30), `You spent ${fmt(rec.avg30)}`);
   if (rec.avg90 > 0) add('Last 90 days', suggestBudget(rec.avg90), `Avg ${fmt(rec.avg90)}/mo`);
   if (rangeAvg > 0 && rangeMonths > 1)

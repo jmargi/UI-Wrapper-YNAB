@@ -9,6 +9,8 @@ import {
 } from '@tabler/icons-react';
 import { useYNAB } from '../context/YNABContext';
 import { useCategorySpend, suggestBudget } from '../utils/categorySpend';
+import AdjustBudgetButton from '../components/AdjustBudgetButton';
+import ColumnHeader from '../components/ColumnHeader';
 
 // Category groups that never represent real discretionary spending — same
 // exclusion list the Budget vs Actual report and Dashboard pie use.
@@ -20,6 +22,9 @@ const EXCLUDED_GROUPS = new Set([
 // dollars AND the spend is at least this fraction over budget — avoids noise
 // from tiny overages.
 const MIN_GAP_DOLLARS = 10;
+
+// Groups/categories that look like savings goals rather than spending.
+const SAVINGS_RE = /sav(e|ing)|invest|emergency|fund\b|goal|retire/i;
 const OVER_FACTOR      = 1.10; // spending >10% over budget
 
 const fmt = (n) =>
@@ -85,17 +90,44 @@ export default function BudgetRecommendationsTab() {
   }, [flatCategories, spendByCat, budgetOverrides, windowDays]);
 
   const windowLabel = `${windowDays} days`;
+  const monthsLabel = `${Number(windowDays) / 30} month${windowDays !== '30' ? 's' : ''}`;
 
   const TrendBadge = ({ trend }) => {
     if (trend === 'rising')
-      return <Tooltip label="Spending faster recently than the 90-day pace" withArrow><Badge size="xs" color="red" variant="light" leftSection={<IconArrowUpRight size={10} />}>rising</Badge></Tooltip>;
+      return <Tooltip label="Spending faster in the last 30 days than your 90-day pace" withArrow><Badge size="xs" color="red" variant="light" leftSection={<IconArrowUpRight size={10} />}>rising</Badge></Tooltip>;
     if (trend === 'falling')
-      return <Tooltip label="Spending slower recently than the 90-day pace" withArrow><Badge size="xs" color="teal" variant="light" leftSection={<IconArrowDownRight size={10} />}>falling</Badge></Tooltip>;
-    return <Badge size="xs" color="gray" variant="light" leftSection={<IconArrowRight size={10} />}>steady</Badge>;
+      return <Tooltip label="Spending slower in the last 30 days than your 90-day pace" withArrow><Badge size="xs" color="teal" variant="light" leftSection={<IconArrowDownRight size={10} />}>falling</Badge></Tooltip>;
+    return <Tooltip label="Last 30 days are in line with your 90-day pace" withArrow><Badge size="xs" color="gray" variant="light" leftSection={<IconArrowRight size={10} />}>steady</Badge></Tooltip>;
   };
+
+  const TIPS = {
+    budget: 'Your monthly budget today (set on the Budget page, or YNAB\'s assigned amount if none is set)',
+    avg:    `What you actually spent per month on average over the last ${windowLabel}`,
+    short:  'How much more you spend each month than you budget',
+    sugg:   'A monthly budget that covers your average spend, rounded up to the nearest $5',
+    unused: 'Budget you haven\'t been using each month. You could move it to the categories above',
+  };
+
+  const headerStyle = { borderBottom: '1px solid var(--mantine-color-default-border)' };
+  const rowStyle    = { borderBottom: '1px solid var(--mantine-color-default-border)' };
+  const BTN_W = 104;
 
   return (
     <Stack gap="md">
+      {/* What am I looking at? */}
+      <Alert variant="light" color="blue" icon={<IconInfoCircle size={16} />} p="sm">
+        <Text size="sm">
+          Are your monthly budgets realistic? This compares each category's <b>monthly budget</b> with
+          what you've <b>actually been spending per month</b> over the last {windowLabel}.
+          The top list shows budgets that are too small. The bottom list shows budgets you aren't using,
+          where you could free up money to cover them.
+        </Text>
+        <Text size="xs" c="dimmed" mt={4}>
+          The bar shows average spending as a share of the budget. Use the button at the end of a row
+          to change that category's monthly budget; it starts on the suggested amount.
+        </Text>
+      </Alert>
+
       {/* Controls + summary */}
       <Card withBorder radius="md" p="md">
         <Group justify="space-between" wrap="wrap" gap="sm">
@@ -113,22 +145,24 @@ export default function BudgetRecommendationsTab() {
             />
           </Group>
           <Group gap="lg">
-            <Box>
-              <Text size="xs" c="dimmed">Suggested monthly increase</Text>
-              <Text fw={800} c="red" size="lg">{fmt(analysis.totalIncrease)}/mo</Text>
-            </Box>
-            {analysis.totalSlack > 0 && (
-              <Box>
-                <Text size="xs" c="dimmed">Reallocatable slack</Text>
-                <Text fw={800} c="teal" size="lg">{fmt(analysis.totalSlack)}/mo</Text>
+            <Tooltip label="Total extra per month needed to cover the categories below at their current spending" multiline w={240} withArrow>
+              <Box style={{ cursor: 'help' }}>
+                <Text size="xs" c="dimmed">You're short each month</Text>
+                <Text fw={800} c="red" size="lg">{fmt(analysis.totalIncrease)}/mo</Text>
               </Box>
+            </Tooltip>
+            {analysis.totalSlack > 0 && (
+              <Tooltip label="Total budget per month you aren't using in over-budgeted categories" multiline w={240} withArrow>
+                <Box style={{ cursor: 'help' }}>
+                  <Text size="xs" c="dimmed">Unused budget you could move</Text>
+                  <Text fw={800} c="teal" size="lg">{fmt(analysis.totalSlack)}/mo</Text>
+                </Box>
+              </Tooltip>
             )}
           </Group>
         </Group>
         <Text size="xs" c="dimmed" mt="xs">
-          Based on your actual transactions over the last {windowLabel}. "Avg/mo" is spend in that window
-          divided by {Number(windowDays) / 30} month{Number(windowDays) / 30 !== 1 ? 's' : ''}, compared to your
-          current monthly budget (local override where set, otherwise YNAB's budgeted amount).
+          "Avg spent/mo" is everything spent in the last {windowLabel} divided by {monthsLabel}.
         </Text>
       </Card>
 
@@ -136,7 +170,10 @@ export default function BudgetRecommendationsTab() {
       <Card withBorder radius="md" p={0} style={{ overflow: 'hidden' }}>
         <Group px="md" py="sm" gap="xs" style={{ background: 'var(--mantine-color-default-hover)' }}>
           <ThemeIcon color="orange" variant="light" size="md"><IconBulb size={15} /></ThemeIcon>
-          <Text fw={600}>Consider increasing these budgets</Text>
+          <div>
+            <Text fw={600}>Budgets that are too small</Text>
+            <Text size="xs" c="dimmed">You regularly spend more than you budget in these categories</Text>
+          </div>
           <Badge color="orange" variant="light" size="sm" ml="auto">{analysis.increases.length}</Badge>
         </Group>
 
@@ -146,22 +183,23 @@ export default function BudgetRecommendationsTab() {
           </Alert>
         ) : (
           <ScrollArea>
-            <Box style={{ minWidth: 620 }}>
+            <Box style={{ minWidth: 780 }}>
               {/* Header */}
-              <Group px="md" py="xs" gap={0} style={{ borderBottom: '1px solid var(--mantine-color-default-border)' }}>
+              <Group px="md" py="xs" gap={0} wrap="nowrap" style={headerStyle}>
                 <Text size="xs" fw={700} style={{ flex: 3 }}>Category</Text>
-                <Text size="xs" fw={700} ta="right" style={{ flex: 1.4 }}>Budget/mo</Text>
-                <Text size="xs" fw={700} ta="right" style={{ flex: 1.4 }}>Avg spend/mo</Text>
-                <Text size="xs" fw={700} ta="right" style={{ flex: 1.4 }}>Over by</Text>
-                <Text size="xs" fw={700} ta="right" style={{ flex: 1.4 }}>Suggested</Text>
+                <ColumnHeader label="Budget now" tip={TIPS.budget} flex={1.4} />
+                <ColumnHeader label="Avg spent/mo" tip={TIPS.avg} flex={1.4} />
+                <ColumnHeader label="Short by" tip={TIPS.short} flex={1.4} />
+                <ColumnHeader label="Suggested" tip={TIPS.sugg} flex={1.4} />
+                <Text size="xs" fw={700} ta="right" style={{ width: BTN_W, flexShrink: 0 }}>Update</Text>
               </Group>
 
               {analysis.increases.map((r) => {
-                const pct = r.current > 0 ? Math.min(200, Math.round((r.avgSel / r.current) * 100)) : null;
+                const pct = r.current > 0 ? Math.round((r.avgSel / r.current) * 100) : null;
                 return (
-                  <Box key={r.id} px="md" py={8} style={{ borderBottom: '1px solid var(--mantine-color-default-border)' }}>
-                    <Group gap={0} wrap="nowrap">
-                      <Box style={{ flex: 3, minWidth: 0 }}>
+                  <Box key={r.id} px="md" py={8} style={rowStyle}>
+                    <Group gap={0} wrap="nowrap" align="flex-start">
+                      <Box style={{ flex: 3, minWidth: 0 }} pr="md">
                         <Group gap={6} wrap="wrap">
                           <Text size="sm" fw={500} lineClamp={1}>{r.name}</Text>
                           {r.noBudget
@@ -169,25 +207,39 @@ export default function BudgetRecommendationsTab() {
                             : <TrendBadge trend={r.trend} />}
                         </Group>
                         <Text size="xs" c="dimmed">{r.group}</Text>
+                        <Progress
+                          mt={4}
+                          value={r.current > 0 ? Math.min(100, (r.avgSel / r.current) * 100) : 100}
+                          color={r.current > 0 && r.avgSel <= r.current ? 'orange' : 'red'}
+                          size="xs" radius="xl"
+                          aria-label={`${r.name}: spending ${pct ?? 'with no'}% of budget`}
+                        />
+                        <Text size="10px" c="red" mt={2}>
+                          {pct != null
+                            ? `Spending ${pct}% of budget each month`
+                            : `Spending ${fmt(r.avgSel)}/mo with nothing budgeted`}
+                        </Text>
                       </Box>
                       <Text size="sm" ta="right" c="dimmed" style={{ flex: 1.4 }}>
                         {r.current > 0 ? fmt(r.current) : '—'}
                       </Text>
                       <Text size="sm" ta="right" fw={500} style={{ flex: 1.4 }}>{fmt(r.avgSel)}</Text>
-                      <Text size="sm" ta="right" fw={600} c="red" style={{ flex: 1.4 }}>
-                        +{fmt(r.gap)}
-                        {pct != null && <Text span size="xs" c="dimmed"> ({pct}%)</Text>}
+                      <Text size="sm" ta="right" fw={600} c="red" style={{ flex: 1.4, whiteSpace: 'nowrap' }}>
+                        {fmt(r.gap)}/mo
                       </Text>
                       <Text size="sm" ta="right" fw={700} c="teal" style={{ flex: 1.4 }}>{fmt(r.suggested)}</Text>
+                      <Group justify="flex-end" style={{ width: BTN_W, flexShrink: 0 }}>
+                        <AdjustBudgetButton
+                          cat={r}
+                          currentMonthly={r.current}
+                          primary={{
+                            label: 'Suggested',
+                            amount: r.suggested,
+                            hint: `Covers your ${fmt(r.avgSel)}/mo average over the last ${windowLabel}`,
+                          }}
+                        />
+                      </Group>
                     </Group>
-                    {r.current > 0 && (
-                      <Progress
-                        mt={6}
-                        value={Math.min(100, (r.avgSel / r.current) * 100)}
-                        color={r.avgSel > r.current ? 'red' : 'orange'}
-                        size="xs" radius="xl"
-                      />
-                    )}
                   </Box>
                 );
               })}
@@ -201,34 +253,76 @@ export default function BudgetRecommendationsTab() {
         <Card withBorder radius="md" p={0} style={{ overflow: 'hidden' }}>
           <Group px="md" py="sm" gap="xs" style={{ background: 'var(--mantine-color-default-hover)' }}>
             <ThemeIcon color="teal" variant="light" size="md"><IconCoin size={15} /></ThemeIcon>
-            <Text fw={600}>Where to pull the money from</Text>
-            <Tooltip label="Categories budgeted well above recent spending — slack you could move to the increases above" withArrow>
-              <ThemeIcon color="gray" variant="subtle" size="sm"><IconInfoCircle size={13} /></ThemeIcon>
-            </Tooltip>
+            <div>
+              <Text fw={600}>Budgets you aren't using</Text>
+              <Text size="xs" c="dimmed">You spend well under budget here. Lower these to free up money for the list above</Text>
+            </div>
             <Badge color="teal" variant="light" size="sm" ml="auto">{analysis.reallocate.length}</Badge>
           </Group>
           <ScrollArea>
-            <Box style={{ minWidth: 480 }}>
-              {analysis.reallocate.map((r) => (
-                <Group key={r.id} px="md" py={8} gap={0} wrap="nowrap"
-                  style={{ borderBottom: '1px solid var(--mantine-color-default-border)' }}>
-                  <Box style={{ flex: 3, minWidth: 0 }}>
-                    <Text size="sm" fw={500} lineClamp={1}>{r.name}</Text>
-                    <Text size="xs" c="dimmed">{r.group}</Text>
+            <Box style={{ minWidth: 640 }}>
+              <Group px="md" py="xs" gap={0} wrap="nowrap" style={headerStyle}>
+                <Text size="xs" fw={700} style={{ flex: 3 }}>Category</Text>
+                <ColumnHeader label="Budget now" tip={TIPS.budget} flex={1.4} />
+                <ColumnHeader label="Avg spent/mo" tip={TIPS.avg} flex={1.4} />
+                <ColumnHeader label="Unused" tip={TIPS.unused} flex={1.4} />
+                <Text size="xs" fw={700} ta="right" style={{ width: BTN_W, flexShrink: 0 }}>Update</Text>
+              </Group>
+              {analysis.reallocate.map((r) => {
+                const pct = Math.round((r.avgSel / r.current) * 100);
+                // Savings / sinking funds are budgeted without being spent, so
+                // don't push a "cut it" suggestion on them.
+                const saving = r.avgSel === 0 || SAVINGS_RE.test(`${r.group} ${r.name}`);
+                return (
+                  <Box key={r.id} px="md" py={8} style={rowStyle}>
+                    <Group gap={0} wrap="nowrap" align="flex-start">
+                      <Box style={{ flex: 3, minWidth: 0 }} pr="md">
+                        <Group gap={6} wrap="wrap">
+                          <Text size="sm" fw={500} lineClamp={1}>{r.name}</Text>
+                          {saving && (
+                            <Tooltip label="Looks like a savings category. Money set aside without spending it is expected here" multiline w={240} withArrow>
+                              <Badge size="xs" color="blue" variant="light">savings?</Badge>
+                            </Tooltip>
+                          )}
+                        </Group>
+                        <Text size="xs" c="dimmed">{r.group}</Text>
+                        <Progress
+                          mt={4} value={pct} color="teal" size="xs" radius="xl"
+                          aria-label={`${r.name}: using ${pct}% of budget`}
+                        />
+                        <Text size="10px" c="dimmed" mt={2}>
+                          {r.avgSel === 0
+                            ? `Nothing spent in the last ${windowLabel}`
+                            : `Using only ${pct}% of budget each month`}
+                        </Text>
+                      </Box>
+                      <Text size="sm" ta="right" c="dimmed" style={{ flex: 1.4 }}>{fmt(r.current)}</Text>
+                      <Text size="sm" ta="right" style={{ flex: 1.4 }}>{fmt(r.avgSel)}</Text>
+                      <Text size="sm" ta="right" fw={600} c="teal" style={{ flex: 1.4, whiteSpace: 'nowrap' }}>{fmt(r.slack)}/mo</Text>
+                      <Group justify="flex-end" style={{ width: BTN_W, flexShrink: 0 }}>
+                        <AdjustBudgetButton
+                          cat={r}
+                          currentMonthly={r.current}
+                          quiet={saving}
+                          primary={saving ? undefined : {
+                            label: 'Match spending',
+                            amount: suggestBudget(r.avgSel),
+                            hint: `Your ${fmt(r.avgSel)}/mo average over the last ${windowLabel}, rounded up`,
+                          }}
+                        />
+                      </Group>
+                    </Group>
                   </Box>
-                  <Text size="sm" ta="right" c="dimmed" style={{ flex: 1.4 }}>{fmt(r.current)}</Text>
-                  <Text size="sm" ta="right" style={{ flex: 1.4 }}>{fmt(r.avgSel)}</Text>
-                  <Text size="sm" ta="right" fw={600} c="teal" style={{ flex: 1.4 }}>{fmt(r.slack)} free</Text>
-                </Group>
-              ))}
+                );
+              })}
             </Box>
           </ScrollArea>
         </Card>
       )}
 
       <Alert color="blue" variant="light" icon={<IconInfoCircle size={14} />}>
-        This report only reads your data — it doesn't change any budgets. Adjust monthly amounts on the
-        Income page's <strong>Monthly Budgets</strong> card, or allocate income from the Income page.
+        Changes you make here update your monthly budget in this app (the same one on the Budget page)
+        and re-split any paychecks that fund that category. Nothing is changed in YNAB.
       </Alert>
     </Stack>
   );
