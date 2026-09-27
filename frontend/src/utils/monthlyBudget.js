@@ -139,6 +139,31 @@ export function checkPaycheckRoom({ cat, dollars, currentDollars = 0, profiles }
 export const describePaycheckProblems = (problems) =>
   problems.map((x) => `${x.name}: ${x.message}`).join(' ');
 
+// What applyMonthlyBudget would actually write to each funding profile's
+// split for this category, without saving anything. Same allocation logic
+// the save path uses (checkPaycheckRoom's uneven-if-needed allocation on a
+// raise, plain even split on a lower or an unchanged amount) — shared so the
+// preview can never drift from what a commit actually does. Returns null if
+// the category isn't funded by any paycheck split, else
+// [{ id, name, perCheck }] in `profiles` order.
+export function previewSplitAllocation({ cat, dollars, currentDollars, profiles }) {
+  const affected = (profiles ?? []).filter((p) =>
+    (p.defaultSplits ?? []).some((s) => s.categoryId === cat.id));
+  if (!affected.length) return null;
+
+  const { allocation } = checkPaycheckRoom({ cat, dollars, currentDollars, profiles });
+  const perCheck = perCheckFor(dollars, profiles);
+  const monthlyById = new Map(
+    (allocation ?? affected.map((p) => ({ id: p.id, monthly: perCheck * CHECKS_PER_SOURCE })))
+      .map((a) => [a.id, a.monthly])
+  );
+  return affected.map((p) => ({
+    id: p.id,
+    name: p.name,
+    perCheck: parseFloat(((monthlyById.get(p.id) ?? 0) / CHECKS_PER_SOURCE).toFixed(2)),
+  }));
+}
+
 // Save a category's monthly budget (local SQLite override — YNAB is NOT
 // written to) and auto-recalculate the per-check splits of every income
 // profile that funds it. Shared by the Budget page editor and the reports.
@@ -148,7 +173,7 @@ export const describePaycheckProblems = (problems) =>
 // Refuses (returns false, nothing saved) if the new amount won't fit in every
 // paycheck that funds the category.
 export async function applyMonthlyBudget({ cat, dollars, currentDollars, profiles, saveBudgetOverride, onReload }) {
-  const { problems, allocation } = checkPaycheckRoom({ cat, dollars, currentDollars, profiles });
+  const { problems } = checkPaycheckRoom({ cat, dollars, currentDollars, profiles });
   if (problems.length) {
     notifications.show({
       title: `Not enough room in the paycheck for ${cat.name}`,
@@ -170,34 +195,22 @@ export async function applyMonthlyBudget({ cat, dollars, currentDollars, profile
   try {
     if (dollars <= 0) throw new Error('skip — $0 monthly would zero out splits');
 
-    const affected = (profiles ?? []).filter((p) =>
-      (p.defaultSplits ?? []).some((s) => s.categoryId === cat.id)
-    );
-
-    // Per-source monthly amount: from the feasibility check's allocation when
-    // available (may be uneven — one source can cover more than an even
-    // split would), else fall back to the plain even split.
-    const perCheck = perCheckFor(dollars, profiles);
-    const monthlyById = new Map(
-      (allocation ?? affected.map((p) => ({ id: p.id, monthly: perCheck * CHECKS_PER_SOURCE })))
-        .map((a) => [a.id, a.monthly])
-    );
+    const preview = previewSplitAllocation({ cat, dollars, currentDollars, profiles }) ?? [];
 
     const summary = [];
-    for (const p of affected) {
-      const monthly = monthlyById.get(p.id) ?? 0;
-      const perCheckDollars = parseFloat((monthly / CHECKS_PER_SOURCE).toFixed(2));
+    for (const { id, name, perCheck: perCheckDollars } of preview) {
+      const p = profiles.find((x) => x.id === id);
       const updatedSplits = (p.defaultSplits ?? []).map((s) =>
         s.categoryId === cat.id ? { ...s, type: 'amount', value: perCheckDollars } : s
       );
       // Safety: never add or remove splits
       if (updatedSplits.length !== (p.defaultSplits ?? []).length) continue;
-      console.log('[auto-recalc]', p.name, 'before:', p.defaultSplits, 'after:', updatedSplits);
-      await api.put(`/rules/profiles/${p.id}`, { ...p, defaultSplits: updatedSplits });
-      summary.push(`${p.name} $${perCheckDollars.toFixed(2)}/check`);
+      console.log('[auto-recalc]', name, 'before:', p.defaultSplits, 'after:', updatedSplits);
+      await api.put(`/rules/profiles/${id}`, { ...p, defaultSplits: updatedSplits });
+      summary.push(`${name} $${perCheckDollars.toFixed(2)}/check`);
     }
 
-    if (affected.length > 0) {
+    if (preview.length > 0) {
       notifications.show({
         title: 'Splits auto-updated',
         message: `${cat.name} → ${summary.join(', ')}`,

@@ -5,7 +5,7 @@ import {
 import { IconAdjustmentsDollar, IconSparkles, IconAlertTriangle } from '@tabler/icons-react';
 import { api, useYNAB } from '../context/YNABContext';
 import { useCategorySpend, suggestBudget } from '../utils/categorySpend';
-import { applyMonthlyBudget, checkPaycheckRoom } from '../utils/monthlyBudget';
+import { applyMonthlyBudget, checkPaycheckRoom, previewSplitAllocation } from '../utils/monthlyBudget';
 
 const fmt = (n) =>
   '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
@@ -102,6 +102,12 @@ export default function AdjustBudgetButton({ cat, currentMonthly, rangeAvg, rang
     : null;
   const blocked = !profiles || room.problems.length > 0;
 
+  // Exactly what Save will write to each funding paycheck's split, so the
+  // recalculated splits are visible before the budget change is committed.
+  const splitPreview = profiles && !blocked && delta !== 0
+    ? previewSplitAllocation({ cat, dollars: Number(value) || 0, currentDollars: currentMonthly, profiles })
+    : null;
+
   return (
     <Popover opened={opened} onChange={setOpened} width={300} position="bottom-end" withArrow shadow="md" trapFocus>
       <Popover.Target>
@@ -185,6 +191,19 @@ export default function AdjustBudgetButton({ cat, currentMonthly, rangeAvg, rang
                 <Text size="xs" c="dimmed">
                   Pick a lower amount, or free up money in other splits on the Income page first.
                 </Text>
+              </Stack>
+            </Alert>
+          )}
+
+          {splitPreview?.length > 0 && (
+            <Alert color="blue" variant="light" p="xs" title="Splits after Save">
+              <Stack gap={2}>
+                {splitPreview.map((p) => (
+                  <Group key={p.id} justify="space-between" gap="xs">
+                    <Text size="xs">{p.name}</Text>
+                    <Text size="xs" fw={600}>${p.perCheck.toFixed(2)}/check</Text>
+                  </Group>
+                ))}
               </Stack>
             </Alert>
           )}
