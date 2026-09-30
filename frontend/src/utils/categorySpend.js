@@ -5,29 +5,31 @@ import { useYNAB } from '../context/YNABContext';
 // rounded up to the nearest $5 so the number is easy to act on.
 export const suggestBudget = (avgMonthly) => Math.max(5, Math.ceil(avgMonthly / 5) * 5);
 
-// Outflow totals per category over the last 30 / 60 / 90 days, computed from
-// the synced transaction list. Returns { [categoryId]: { s30, s60, s90 } } in
-// milliunits (positive = money spent).
+// Outflow totals per category over the last 30 / 60 / 90 / 180 / 365 days,
+// computed from the synced transaction list. Returns
+// { [categoryId]: { s30, s60, s90, s180, s365 } } in milliunits (positive =
+// money spent).
+const WINDOWS = [30, 60, 90, 180, 365];
+
 export function useCategorySpend() {
   const { transactions } = useYNAB();
-  // Spend per category across all three windows, in one pass over transactions.
+  // Spend per category across all windows, in one pass over transactions.
   // YNAB outflows are negative milliunits; income/transfers are excluded.
   return useMemo(() => {
     const now = new Date();
     const dayMs = 86_400_000;
-    const cut30 = new Date(now.getTime() - 30 * dayMs).toISOString().slice(0, 10);
-    const cut60 = new Date(now.getTime() - 60 * dayMs).toISOString().slice(0, 10);
-    const cut90 = new Date(now.getTime() - 90 * dayMs).toISOString().slice(0, 10);
+    const cuts = WINDOWS.map((d) => new Date(now.getTime() - d * dayMs).toISOString().slice(0, 10));
+    const furthestCut = cuts[cuts.length - 1];
 
-    const map = {}; // categoryId → { s30, s60, s90 } in milliunits
+    const map = {}; // categoryId → { s30, s60, s90, s180, s365 } in milliunits
     const bucketFor = (catId) => {
-      if (!map[catId]) map[catId] = { s30: 0, s60: 0, s90: 0 };
+      if (!map[catId]) map[catId] = Object.fromEntries(WINDOWS.map((d) => [`s${d}`, 0]));
       return map[catId];
     };
 
     for (const t of transactions) {
       if (t.deleted || t.transfer_account_id) continue;
-      if (!t.date || t.date < cut90) continue;
+      if (!t.date || t.date < furthestCut) continue;
 
       // Handle split transactions: a parent with subtransactions carries no
       // category itself — attribute each child to its own category.
@@ -41,9 +43,11 @@ export function useCategorySpend() {
         if (!catId || amt >= 0) continue; // outflows only
         const spend = Math.abs(amt);
         const bucket = bucketFor(catId);
-        if (t.date >= cut30)      { bucket.s30 += spend; bucket.s60 += spend; bucket.s90 += spend; }
-        else if (t.date >= cut60) {                      bucket.s60 += spend; bucket.s90 += spend; }
-        else                      {                                           bucket.s90 += spend; }
+        // A transaction within window N is also within every wider window.
+        for (let i = 0; i < WINDOWS.length; i++) {
+          if (t.date < cuts[i]) continue;
+          bucket[`s${WINDOWS[i]}`] += spend;
+        }
       }
     }
     return map;

@@ -13,9 +13,11 @@ import AdjustBudgetButton from '../components/AdjustBudgetButton';
 import ColumnHeader from '../components/ColumnHeader';
 
 // Category groups that never represent real discretionary spending — same
-// exclusion list the Budget vs Actual report and Dashboard pie use.
+// exclusion list the Budget vs Actual report and Dashboard pie use. "Saving"
+// is this app's actual group name for savings goals — excluded outright,
+// never just flagged, per user preference: no savings categories here at all.
 const EXCLUDED_GROUPS = new Set([
-  'Internal Master Category', 'Inflow', 'Hidden Categories', 'Credit Card Payments',
+  'Internal Master Category', 'Inflow', 'Hidden Categories', 'Credit Card Payments', 'Saving',
 ]);
 
 // Only surface a recommendation when the monthly gap is at least this many
@@ -23,16 +25,21 @@ const EXCLUDED_GROUPS = new Set([
 // from tiny overages.
 const MIN_GAP_DOLLARS = 10;
 
-// Groups/categories that look like savings goals rather than spending.
+// Individually-named savings/goal categories that might live outside the
+// "Saving" group (e.g. filed under "Other Expenses"). Excluded the same way.
 const SAVINGS_RE = /sav(e|ing)|invest|emergency|fund\b|goal|retire/i;
 const OVER_FACTOR      = 1.10; // spending >10% over budget
+// A category counts as a rebalance-from candidate once it's using less than
+// this share of its budget — loosened from a stricter 60% so mild
+// underspenders show up too, not just categories barely touched.
+const UNDERSPEND_FACTOR = 0.85;
 
 const fmt = (n) =>
   '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export default function BudgetRecommendationsTab() {
   const { flatCategories, budgetOverrides } = useYNAB();
-  const [windowDays, setWindowDays] = useState('30'); // '30' | '60' | '90'
+  const [windowDays, setWindowDays] = useState('30'); // '30' | '60' | '90' | '180' | '365'
 
   const spendByCat = useCategorySpend();
 
@@ -44,11 +51,12 @@ export default function BudgetRecommendationsTab() {
       : Math.abs(cat.budgeted || 0) / 1000;
 
   const analysis = useMemo(() => {
-    const months = Number(windowDays) / 30; // 1, 2 or 3
-    const key    = windowDays === '30' ? 's30' : windowDays === '60' ? 's60' : 's90';
+    const months = Number(windowDays) / 30; // 1, 2, 3, 6 or 12
+    const key    = `s${windowDays}`;
 
     const rows = (flatCategories ?? [])
-      .filter((c) => !c.hidden && !c.deleted && !EXCLUDED_GROUPS.has(c.groupName))
+      .filter((c) => !c.hidden && !c.deleted && !EXCLUDED_GROUPS.has(c.groupName)
+        && !SAVINGS_RE.test(`${c.groupName} ${c.name}`))
       .map((c) => {
         const s          = spendByCat[c.id] ?? { s30: 0, s60: 0, s90: 0 };
         const spentSel   = (s[key] ?? 0) / 1000;         // total spend in selected window ($)
@@ -77,9 +85,11 @@ export default function BudgetRecommendationsTab() {
       .filter((r) => r.avgSel > 0 && (r.noBudget || (r.avgSel > r.current * OVER_FACTOR && r.gap >= MIN_GAP_DOLLARS)))
       .sort((a, b) => b.gap - a.gap);
 
-    // Over-budgeted with real budget and low spend — a funding source.
+    // Over-budgeted with real budget and low spend — a funding source to
+    // rebalance from into the categories above.
     const reallocate = rows
-      .filter((r) => r.current >= 20 && r.avgSel < r.current * 0.6 && (r.current - r.avgSel) >= MIN_GAP_DOLLARS)
+      .filter((r) => r.current >= 20 && r.avgSel < r.current * UNDERSPEND_FACTOR
+        && (r.current - r.avgSel) >= MIN_GAP_DOLLARS)
       .map((r) => ({ ...r, slack: r.current - r.avgSel }))
       .sort((a, b) => b.slack - a.slack);
 
@@ -89,8 +99,10 @@ export default function BudgetRecommendationsTab() {
     return { increases, reallocate, totalIncrease, totalSlack };
   }, [flatCategories, spendByCat, budgetOverrides, windowDays]);
 
-  const windowLabel = `${windowDays} days`;
-  const monthsLabel = `${Number(windowDays) / 30} month${windowDays !== '30' ? 's' : ''}`;
+  const WINDOW_LABELS = { 30: '30 days', 60: '60 days', 90: '90 days', 180: '6 months', 365: '1 year' };
+  const windowLabel = WINDOW_LABELS[windowDays] ?? `${windowDays} days`;
+  const monthsN      = Number(windowDays) / 30;
+  const monthsLabel  = `${monthsN} month${monthsN !== 1 ? 's' : ''}`;
 
   const TrendBadge = ({ trend }) => {
     if (trend === 'rising')
@@ -141,6 +153,8 @@ export default function BudgetRecommendationsTab() {
                 { value: '30', label: '30 days' },
                 { value: '60', label: '60 days' },
                 { value: '90', label: '90 days' },
+                { value: '180', label: '6 months' },
+                { value: '365', label: '1 year' },
               ]}
             />
           </Group>
@@ -187,9 +201,9 @@ export default function BudgetRecommendationsTab() {
               {/* Header */}
               <Group px="md" py="xs" gap={0} wrap="nowrap" style={headerStyle}>
                 <Text size="xs" fw={700} style={{ flex: 3 }}>Category</Text>
-                <ColumnHeader label="Budget now" tip={TIPS.budget} flex={1.4} />
                 <ColumnHeader label="Avg spent/mo" tip={TIPS.avg} flex={1.4} />
                 <ColumnHeader label="Short by" tip={TIPS.short} flex={1.4} />
+                <ColumnHeader label="Budget now" tip={TIPS.budget} flex={1.4} />
                 <ColumnHeader label="Suggested" tip={TIPS.sugg} flex={1.4} />
                 <Text size="xs" fw={700} ta="right" style={{ width: BTN_W, flexShrink: 0 }}>Update</Text>
               </Group>
@@ -220,12 +234,12 @@ export default function BudgetRecommendationsTab() {
                             : `Spending ${fmt(r.avgSel)}/mo with nothing budgeted`}
                         </Text>
                       </Box>
-                      <Text size="sm" ta="right" c="dimmed" style={{ flex: 1.4 }}>
-                        {r.current > 0 ? fmt(r.current) : '—'}
-                      </Text>
                       <Text size="sm" ta="right" fw={500} style={{ flex: 1.4 }}>{fmt(r.avgSel)}</Text>
                       <Text size="sm" ta="right" fw={600} c="red" style={{ flex: 1.4, whiteSpace: 'nowrap' }}>
                         {fmt(r.gap)}/mo
+                      </Text>
+                      <Text size="sm" ta="right" c="dimmed" style={{ flex: 1.4 }}>
+                        {r.current > 0 ? fmt(r.current) : '—'}
                       </Text>
                       <Text size="sm" ta="right" fw={700} c="teal" style={{ flex: 1.4 }}>{fmt(r.suggested)}</Text>
                       <Group justify="flex-end" style={{ width: BTN_W, flexShrink: 0 }}>
@@ -270,18 +284,18 @@ export default function BudgetRecommendationsTab() {
               </Group>
               {analysis.reallocate.map((r) => {
                 const pct = Math.round((r.avgSel / r.current) * 100);
-                // Savings / sinking funds are budgeted without being spent, so
-                // don't push a "cut it" suggestion on them.
-                const saving = r.avgSel === 0 || SAVINGS_RE.test(`${r.group} ${r.name}`);
+                // Nothing spent at all — could be a category that's just not due yet
+                // this window (e.g. an annual bill), so don't push a "cut it" suggestion.
+                const unspent = r.avgSel === 0;
                 return (
                   <Box key={r.id} px="md" py={8} style={rowStyle}>
                     <Group gap={0} wrap="nowrap" align="flex-start">
                       <Box style={{ flex: 3, minWidth: 0 }} pr="md">
                         <Group gap={6} wrap="wrap">
                           <Text size="sm" fw={500} lineClamp={1}>{r.name}</Text>
-                          {saving && (
-                            <Tooltip label="Looks like a savings category. Money set aside without spending it is expected here" multiline w={240} withArrow>
-                              <Badge size="xs" color="blue" variant="light">savings?</Badge>
+                          {unspent && (
+                            <Tooltip label="Nothing spent here in this window — might just not be due yet (e.g. an annual bill)" multiline w={240} withArrow>
+                              <Badge size="xs" color="blue" variant="light">unspent</Badge>
                             </Tooltip>
                           )}
                         </Group>
@@ -303,8 +317,8 @@ export default function BudgetRecommendationsTab() {
                         <AdjustBudgetButton
                           cat={r}
                           currentMonthly={r.current}
-                          quiet={saving}
-                          primary={saving ? undefined : {
+                          quiet={unspent}
+                          primary={unspent ? undefined : {
                             label: 'Match spending',
                             amount: suggestBudget(r.avgSel),
                             hint: `Your ${fmt(r.avgSel)}/mo average over the last ${windowLabel}, rounded up`,
