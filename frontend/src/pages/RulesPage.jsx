@@ -14,13 +14,16 @@ import {
   IconUpload, IconCheck, IconX, IconAlertCircle,
   IconFileImport, IconClock, IconCurrencyDollar,
   IconAlertTriangle, IconChevronDown, IconChevronRight, IconRefresh,
-  IconHistory, IconDeviceFloppy, IconChartBar, IconInfoCircle,
+  IconHistory, IconDeviceFloppy, IconChartBar, IconInfoCircle, IconArrowsExchange,
 } from '@tabler/icons-react';
 import { api, useYNAB } from '../context/YNABContext';
 import DateRangeFilter from '../components/DateRangeFilter';
 import CategoryPicker from '../components/CategoryPicker';
 import { formatCurrency, formatDate } from '../utils/format';
-import { applyMonthlyBudget } from '../utils/monthlyBudget';
+import {
+  applyMonthlyBudget, allocateAcrossSources, profileOverage,
+  planRebalanceOverage, applyRebalance,
+} from '../utils/monthlyBudget';
 import AdjustBudgetButton from '../components/AdjustBudgetButton';
 import ColumnHeader from '../components/ColumnHeader';
 
@@ -2276,7 +2279,62 @@ export function ProfileModal({ opened, onClose, profile, onSaved }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Profile Card
 // ─────────────────────────────────────────────────────────────────────────────
-export function ProfileCard({ profile, allRules, onEdit, onDelete, onImportCSV, onModifySplits }) {
+// Shows only when this income source's splits add up to more than its
+// paycheck. Tells you the overage and — in one click — moves money on
+// whichever shared categories it can to sources with room, same allocation
+// logic used everywhere else in this file. Categories funded ONLY by this
+// source can't be moved (nowhere to put them) and are left alone; if some
+// overage is left after the plan, says so rather than pretending it's fixed.
+function RebalanceOverageButton({ profile, allProfiles, onReload }) {
+  const [running, setRunning] = useState(false);
+  const { overage } = profileOverage(profile);
+  if (overage <= 0.005) return null;
+
+  const handleRebalance = async () => {
+    setRunning(true);
+    try {
+      const plan = planRebalanceOverage(profile.id, allProfiles);
+      if (!plan.moves.length) {
+        notifications.show({
+          title: `Can't auto-fix ${profile.name}`,
+          message: `Over by $${overage.toFixed(2)}/check, but every category here is only funded by ${profile.name} — nothing to move it to. Raise this source's paycheck amount, lower a category's budget, or split one of these categories onto another source first.`,
+          color: 'red',
+          autoClose: false,
+        });
+        return;
+      }
+      await applyRebalance(plan, allProfiles);
+      const moved = plan.moves.map((m) => m.categoryName).join(', ');
+      notifications.show({
+        title: plan.resolved ? `${profile.name} rebalanced` : `${profile.name} partially rebalanced`,
+        message: plan.resolved
+          ? `Moved: ${moved}. No longer over.`
+          : `Moved: ${moved}. Still over by $${plan.remaining.toFixed(2)}/check — the rest is only funded by ${profile.name}, so it can't be auto-moved.`,
+        color: plan.resolved ? 'teal' : 'orange',
+        autoClose: plan.resolved ? 5000 : false,
+      });
+      onReload?.();
+    } catch (err) {
+      notifications.show({ title: 'Rebalance failed', message: err.message, color: 'red' });
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <Alert color="red" variant="light" p="xs" icon={<IconAlertTriangle size={14} />}>
+      <Group justify="space-between" gap="xs" wrap="nowrap">
+        <Text size="xs">Over by <strong>${overage.toFixed(2)}/check</strong></Text>
+        <Button size="compact-xs" color="red" loading={running}
+          leftSection={<IconArrowsExchange size={12} />} onClick={handleRebalance}>
+          Rebalance
+        </Button>
+      </Group>
+    </Alert>
+  );
+}
+
+export function ProfileCard({ profile, allProfiles, allRules, onEdit, onDelete, onImportCSV, onModifySplits, onReload }) {
   const Icon        = getIconComponent(profile.icon);
   const ruleCount   = allRules.filter((r) => r.profileId === profile.id).length;
   const activeCount = allRules.filter((r) => r.profileId === profile.id && r.enabled).length;
@@ -2341,7 +2399,7 @@ export function ProfileCard({ profile, allRules, onEdit, onDelete, onImportCSV, 
             </Badge>
           )}
         </Group>
-        <Group gap="xs" wrap="wrap">
+        <Group gap="xs" wrap="wrap" mb={(allProfiles?.length ?? 0) > 1 ? 'xs' : 0}>
           <Button size="xs" color={profile.color} variant="light"
             leftSection={<IconGitBranch size={12} />} onClick={onModifySplits}>
             Modify Splits
@@ -2351,6 +2409,9 @@ export function ProfileCard({ profile, allRules, onEdit, onDelete, onImportCSV, 
             Simple CSV
           </Button>
         </Group>
+        {(allProfiles?.length ?? 0) > 1 && (
+          <RebalanceOverageButton profile={profile} allProfiles={allProfiles} onReload={onReload} />
+        )}
       </Box>
     </Card>
   );
@@ -2575,6 +2636,7 @@ export function SplitsModal({ opened, onClose, profile, allProfiles, onSaved }) 
   };
 
   const handleSave = async () => {
+    if (isOver) return; // belt-and-suspenders — the button is disabled for this too
     setSaving(true);
     try {
       await persist(splits);
@@ -2814,7 +2876,9 @@ export function SplitsModal({ opened, onClose, profile, allProfiles, onSaved }) 
                 {isOver && (
                   <Alert color="red" icon={<IconAlertTriangle size={14} />} p="xs">
                     Your splits exceed your ${checkAmount.toFixed(2)} paycheck by <strong>${overage.toFixed(2)}</strong>.
-                    Reduce split amounts or increase your check amount in the profile settings.
+                    Save is disabled until this is resolved — lower a split amount here, raise this
+                    source's paycheck amount in its profile settings, or close this and use the
+                    Rebalance button on this source's card to move the excess to another source automatically.
                   </Alert>
                 )}
               </Stack>
@@ -2830,9 +2894,11 @@ export function SplitsModal({ opened, onClose, profile, allProfiles, onSaved }) 
             </Button>
             <Group align="center">
               <Button variant="default" onClick={onClose}>Cancel</Button>
-              <Button color={profile.color} loading={saving} onClick={handleSave} leftSection={<IconCheck size={14} />}>
-                Save Changes
-              </Button>
+              <Tooltip label={isOver ? 'Splits exceed the paycheck — fix the overage above before saving' : ''} disabled={!isOver} withArrow>
+                <Button color={profile.color} loading={saving} disabled={isOver} onClick={handleSave} leftSection={<IconCheck size={14} />}>
+                  Save Changes
+                </Button>
+              </Tooltip>
             </Group>
           </Group>
         </Stack>
@@ -3109,14 +3175,20 @@ export function SplitHistoryTab() {
 // ─────────────────────────────────────────────────────────────────────────────
 // RecalculateSplitsButton
 // Uses monthly budget (SQLite override → YNAB budgeted) as source of truth.
-// perCheck = monthly ÷ 4  (2 sources × 2 checks each).
+// Per-source share comes from allocateAcrossSources — an even split across
+// every source that funds a category, unless a source doesn't have room, in
+// which case another source with room picks up the difference (same logic
+// AdjustBudgetButton uses on a single category). This used to divide every
+// category's monthly amount by a hardcoded "2 sources × 2 checks" regardless
+// of which/how many sources actually fund it, or whether a source had room —
+// that's what was letting Recalculate Splits push an income source over its
+// paycheck. Categories that can't fit anywhere (combined headroom too small)
+// are left untouched and called out, not forced into an overage.
 // Idempotent: skips any split already within $0.01 of the correct value.
 // ─────────────────────────────────────────────────────────────────────────────
 export function RecalculateSplitsButton({ profiles, onReload }) {
   const { flatCategories } = useYNAB();
   const [running, setRunning] = useState(false);
-
-  const DIVISOR = 4; // 2 sources × 2 checks/month
 
   const handleRecalc = async () => {
     setRunning(true);
@@ -3125,56 +3197,73 @@ export function RecalculateSplitsButton({ profiles, onReload }) {
       const overridesRes = await api.get('/rules/budget-overrides');
       const overrides    = overridesRes.data ?? {}; // { categoryId: milliunits }
 
-      let totalUpdated   = 0;
-      let totalCurrent   = 0;
+      // Working copy, mutated category by category so headroom reflects
+      // every prior change by the time a later category is considered.
+      const work    = new Map(profiles.map((p) => [p.id, (p.defaultSplits ?? []).map((s) => ({ ...s }))]));
+      const checkOf = new Map(profiles.map((p) => [p.id, p.checkAmount || 0]));
 
-      for (const profile of profiles) {
-        const splits = profile.defaultSplits ?? [];
-        if (splits.length === 0) continue;
+      const categoryIds = [...new Set(profiles.flatMap((p) => (p.defaultSplits ?? []).map((s) => s.categoryId).filter(Boolean)))];
 
-        let changed = false;
-        const newSplits = splits.map((s) => {
-          if (!s.categoryId) return s;
+      let totalUpdated = 0;
+      let totalCurrent = 0;
+      const skipped = [];
 
-          // Source of truth: SQLite override first, then YNAB budgeted
-          const overrideMil = overrides[s.categoryId];
-          const cat         = flatCategories.find((c) => c.id === s.categoryId);
-          const monthly     = overrideMil != null
-            ? overrideMil / 1000
-            : Math.abs((cat?.budgeted ?? 0) / 1000);
+      for (const catId of categoryIds) {
+        const overrideMil = overrides[catId];
+        const cat          = flatCategories.find((c) => c.id === catId);
+        const monthly      = overrideMil != null ? overrideMil / 1000 : Math.abs((cat?.budgeted ?? 0) / 1000);
+        if (monthly === 0) { totalCurrent++; continue; } // no budget set, leave alone
 
-          if (monthly === 0) { totalCurrent++; return s; } // no budget set, leave alone
-
-          const correct = parseFloat((monthly / DIVISOR).toFixed(2));
-
-          if (Math.abs((s.value ?? 0) - correct) < 0.01) {
-            totalCurrent++;
-            return s; // already correct
-          }
-
-          changed = true;
-          totalUpdated++;
-          return { ...s, type: 'amount', value: correct };
+        const funding = profiles.filter((p) => (work.get(p.id) ?? []).some((s) => s.categoryId === catId));
+        const sources = funding.map((p) => {
+          const otherTotal = (work.get(p.id) ?? [])
+            .filter((s) => s.categoryId !== catId)
+            .reduce((sum, s) => sum + splitDollarAmount(s, checkOf.get(p.id)), 0);
+          const headroomPerCheck = Math.max(0, checkOf.get(p.id) - otherTotal);
+          return { id: p.id, headroomMonthly: headroomPerCheck * 2 };
         });
 
-        if (changed) {
-          await api.put(`/rules/profiles/${profile.id}`, { ...profile, defaultSplits: newSplits });
+        const allocation = allocateAcrossSources(monthly, sources);
+        if (!allocation) {
+          skipped.push(cat?.name ?? catId);
+          totalCurrent++;
+          continue;
+        }
+
+        for (const a of allocation) {
+          const correct = parseFloat((a.monthly / 2).toFixed(2));
+          const list = work.get(a.id);
+          const idx  = list.findIndex((s) => s.categoryId === catId);
+          if (Math.abs((list[idx].value ?? 0) - correct) < 0.01) { totalCurrent++; continue; }
+          list[idx] = { ...list[idx], type: 'amount', value: correct };
+          totalUpdated++;
+        }
+      }
+
+      if (totalUpdated > 0) {
+        for (const profile of profiles) {
+          const newSplits = work.get(profile.id);
+          const changed = (profile.defaultSplits ?? []).some((s, i) =>
+            Math.abs((s.value ?? 0) - (newSplits[i]?.value ?? 0)) >= 0.005);
+          if (changed) await api.put(`/rules/profiles/${profile.id}`, { ...profile, defaultSplits: newSplits });
         }
       }
 
       if (totalUpdated === 0) {
         notifications.show({
           title: 'Splits are up to date',
-          message: `All ${totalCurrent} splits already match their monthly budgets ÷ ${DIVISOR} checks.`,
-          color: 'teal',
-          autoClose: 4000,
+          message: `All ${totalCurrent} splits already match their monthly budgets.`
+            + (skipped.length ? ` ${skipped.length} couldn't fit anywhere and were left as-is: ${skipped.join(', ')}.` : ''),
+          color: skipped.length ? 'orange' : 'teal',
+          autoClose: skipped.length ? false : 4000,
         });
       } else {
         notifications.show({
           title: 'Splits recalculated',
-          message: `${totalUpdated} split${totalUpdated !== 1 ? 's' : ''} updated · ${totalCurrent} already correct.`,
-          color: 'teal',
-          autoClose: 4000,
+          message: `${totalUpdated} split${totalUpdated !== 1 ? 's' : ''} updated · ${totalCurrent} already correct.`
+            + (skipped.length ? ` ${skipped.length} couldn't fit anywhere and were left as-is: ${skipped.join(', ')}.` : ''),
+          color: skipped.length ? 'orange' : 'teal',
+          autoClose: skipped.length ? false : 4000,
         });
         onReload?.();
       }
@@ -3187,7 +3276,7 @@ export function RecalculateSplitsButton({ profiles, onReload }) {
 
   return (
     <Group justify="flex-end">
-      <Tooltip label={`Monthly budget ÷ 4 checks (2 sources × 2/mo). Skips splits already correct.`} withArrow>
+      <Tooltip label="Re-splits every category across the sources that fund it, evenly where there's room for that. Won't push a source over its paycheck — skips anything that can't fit." withArrow>
         <Button
           size="xs"
           variant="light"

@@ -28,7 +28,7 @@ const money = (n) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2,
 // Returns an array of { id, monthly } (one entry per source, in `sources`
 // order) on success, or null if total headroom across the sources is too
 // small no matter how it's divided.
-function allocateAcrossSources(neededMonthly, sources) {
+export function allocateAcrossSources(neededMonthly, sources) {
   if (!sources.length) return neededMonthly <= 0.005 ? [] : null;
   const evenShare = neededMonthly / sources.length;
   if (sources.every((s) => evenShare <= s.headroomMonthly + 0.005)) {
@@ -138,6 +138,110 @@ export function checkPaycheckRoom({ cat, dollars, currentDollars = 0, profiles }
 // One-line description of paycheck problems, for notifications.
 export const describePaycheckProblems = (problems) =>
   problems.map((x) => `${x.name}: ${x.message}`).join(' ');
+
+// Is this income source currently over-allocated (its splits add up to more
+// than its paycheck)? { total, overage } in dollars/check; overage <= 0 means
+// it's fine.
+export function profileOverage(profile) {
+  const check = profile?.checkAmount || 0;
+  const total = (profile?.defaultSplits ?? []).reduce((sum, s) => sum + splitDollars(s, check), 0);
+  return { total, overage: total - check };
+}
+
+// Build a plan to fix an over-allocated income source by moving money on its
+// SHARED categories (ones also split on another source) to wherever there's
+// room — the same even-then-greedy allocation used for a category budget
+// raise, applied per category until the overage is gone or there's nothing
+// left to try. Never invents a split on a source that doesn't already have
+// one for that category (same rule as everywhere else in this file) — a
+// category funded ONLY by the over-allocated source can't be moved
+// automatically and is left alone.
+//
+// Returns { overage, resolved, remaining, moves, updatedProfiles } where:
+//   overage          — how over the source was per check, in dollars
+//   resolved         — true if the plan eliminates the overage entirely
+//   remaining        — per-check overage still left after the plan (0 if resolved)
+//   moves            — [{ categoryId, categoryName, changes: [{ id, name, before, after }] }]
+//   updatedProfiles  — [{ id, defaultSplits }] ready to PUT, one per touched profile
+export function planRebalanceOverage(profileId, profiles) {
+  const target = (profiles ?? []).find((p) => p.id === profileId);
+  if (!target) return null;
+
+  const { overage } = profileOverage(target);
+  if (overage <= 0.005) return { overage: 0, resolved: true, remaining: 0, moves: [], updatedProfiles: [] };
+
+  // Working copy of every profile's splits — mutated as moves are found, so
+  // later categories see the room freed up (or used) by earlier ones.
+  const work   = new Map((profiles ?? []).map((p) => [p.id, (p.defaultSplits ?? []).map((s) => ({ ...s }))]));
+  const checkOf = new Map((profiles ?? []).map((p) => [p.id, p.checkAmount || 0]));
+  const nameOf  = new Map((profiles ?? []).map((p) => [p.id, p.name]));
+
+  const targetCats = (work.get(profileId) ?? [])
+    .filter((s) => s.categoryId)
+    .sort((a, b) => splitDollars(b, checkOf.get(profileId)) - splitDollars(a, checkOf.get(profileId)));
+
+  const moves = [];
+
+  const currentTargetOverage = () => {
+    const total = (work.get(profileId) ?? []).reduce((sum, s) => sum + splitDollars(s, checkOf.get(profileId)), 0);
+    return total - checkOf.get(profileId);
+  };
+
+  for (const s of targetCats) {
+    if (currentTargetOverage() <= 0.005) break;
+    const catId = s.categoryId;
+    const funding = (profiles ?? []).filter((p) => (work.get(p.id) ?? []).some((x) => x.categoryId === catId));
+    if (funding.length < 2) continue; // not shared with any other source — nowhere to move it
+
+    const totalMonthly = funding.reduce((sum, p) => {
+      const sp = (work.get(p.id) ?? []).find((x) => x.categoryId === catId);
+      return sum + splitDollars(sp, checkOf.get(p.id)) * CHECKS_PER_SOURCE;
+    }, 0);
+
+    const sources = funding.map((p) => {
+      const otherTotal = (work.get(p.id) ?? [])
+        .filter((x) => x.categoryId !== catId)
+        .reduce((sum, x) => sum + splitDollars(x, checkOf.get(p.id)), 0);
+      const headroomPerCheck = Math.max(0, checkOf.get(p.id) - otherTotal);
+      return { id: p.id, headroomMonthly: headroomPerCheck * CHECKS_PER_SOURCE };
+    });
+
+    const allocation = allocateAcrossSources(totalMonthly, sources);
+    if (!allocation) continue; // can't even keep this category fully funded elsewhere — leave it
+
+    const changes = [];
+    for (const a of allocation) {
+      const perCheck = parseFloat((a.monthly / CHECKS_PER_SOURCE).toFixed(2));
+      const list = work.get(a.id);
+      const idx  = list.findIndex((x) => x.categoryId === catId);
+      const before = list[idx].value ?? 0;
+      if (Math.abs(before - perCheck) < 0.005) continue;
+      list[idx] = { ...list[idx], type: 'amount', value: perCheck };
+      changes.push({ id: a.id, name: nameOf.get(a.id), before, after: perCheck });
+    }
+    // Only count it as a move if it actually reduced the target's share.
+    const targetChange = changes.find((c) => c.id === profileId);
+    if (!changes.length || !targetChange || targetChange.after >= targetChange.before - 0.005) continue;
+
+    moves.push({ categoryId: catId, categoryName: s.name || catId, changes });
+  }
+
+  const remaining = Math.max(0, currentTargetOverage());
+  const updatedProfiles = [...new Set(moves.flatMap((m) => m.changes.map((c) => c.id)))]
+    .map((id) => ({ id, defaultSplits: work.get(id) }));
+
+  return { overage, resolved: remaining <= 0.005, remaining, moves, updatedProfiles };
+}
+
+// Persist a planRebalanceOverage() plan — writes each touched profile's full
+// updated defaultSplits (other fields unchanged).
+export async function applyRebalance(plan, profiles) {
+  for (const { id, defaultSplits } of plan.updatedProfiles) {
+    const p = (profiles ?? []).find((x) => x.id === id);
+    if (!p) continue;
+    await api.put(`/rules/profiles/${id}`, { ...p, defaultSplits });
+  }
+}
 
 // What applyMonthlyBudget would actually write to each funding profile's
 // split for this category, without saving anything. Same allocation logic

@@ -107,11 +107,13 @@ export default function BudgetPage() {
                 <Grid.Col key={profile.id} span={{ base: 12, sm: 6, lg: 4 }}>
                   <ProfileCard
                     profile={profile}
+                    allProfiles={profiles}
                     allRules={rules}
                     onEdit={() => { setEditProfile(profile); openProfileModal(); }}
                     onDelete={() => requestDeleteProfile(profile)}
                     onImportCSV={() => { setCsvProfile(profile); openCsvModal(); }}
                     onModifySplits={() => openModifySplits(profile)}
+                    onReload={load}
                   />
                 </Grid.Col>
               ))}
