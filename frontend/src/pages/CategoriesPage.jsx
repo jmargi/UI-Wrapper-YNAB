@@ -17,7 +17,14 @@ import { formatCurrency } from '../utils/format';
 const HIDDEN_GROUPS = new Set(['Internal Master Category', 'Hidden Categories', 'Credit Card Payments', 'Inflow']);
 
 export default function CategoriesPage() {
-  const { activeBudgetId, loading: ctxLoading, saveBudgetOverride } = useYNAB();
+  const { activeBudgetId, loading: ctxLoading, saveBudgetOverride, budgetOverrides } = useYNAB();
+
+  // This app's own standing monthly budget reference for a category (local
+  // override if one's been set via Adjust/Recommendations, else whatever
+  // YNAB has assigned this specific month). Can drift from "Allocated this
+  // month" below since overrides are never pushed back to YNAB.
+  const monthlyBudgetFor = (cat) =>
+    budgetOverrides[cat.id] != null ? Math.abs(budgetOverrides[cat.id]) : Math.abs(cat.budgeted ?? 0);
 
   // ── Add modal ──────────────────────────────────────────────────────────────
   const [addOpened, { open: openAdd, close: closeAdd }] = useDisclosure(false);
@@ -409,7 +416,8 @@ export default function CategoriesPage() {
       {/* ── Category Accordion ──────────────────────────────────────────── */}
       <Accordion variant="separated" multiple>
         {filtered.map((group) => {
-          const groupBudgeted = group.categories.reduce((s, c) => s + (c.budgeted ?? 0), 0);
+          const groupBudgeted      = group.categories.reduce((s, c) => s + (c.budgeted ?? 0), 0);
+          const groupMonthlyBudget = group.categories.reduce((s, c) => s + monthlyBudgetFor(c), 0);
           const groupActivity = group.categories.reduce((s, c) => s + (c.activity ?? 0), 0);
           const groupBalance  = group.categories.reduce((s, c) => s + (c.balance  ?? 0), 0);
 
@@ -420,8 +428,12 @@ export default function CategoriesPage() {
                   <Text fw={600} lineClamp={1} style={{ flex: 1, minWidth: 0 }}>{group.name}</Text>
                   <Group gap="md" wrap="nowrap" style={{ flexShrink: 0 }}>
                     <div>
-                      <Text size="xs" c="dimmed">Budgeted</Text>
+                      <Text size="xs" c="dimmed">Allocated this month</Text>
                       <Text size="sm" fw={500}>{formatCurrency(groupBudgeted)}</Text>
+                    </div>
+                    <div>
+                      <Text size="xs" c="dimmed">Monthly budget</Text>
+                      <Text size="sm" fw={500}>{formatCurrency(groupMonthlyBudget)}</Text>
                     </div>
                     <div>
                       <Text size="xs" c="dimmed">Balance</Text>
@@ -454,8 +466,12 @@ export default function CategoriesPage() {
                           </Group>
                           <Group gap="md" wrap="nowrap" style={{ flexShrink: 0 }}>
                             <div style={{ textAlign: 'right' }}>
-                              <Text size="10px" c="dimmed" lh={1}>Budgeted</Text>
+                              <Text size="10px" c="dimmed" lh={1}>Allocated this month</Text>
                               <Text size="xs" c="dimmed">{formatCurrency(budgeted)}</Text>
+                            </div>
+                            <div style={{ textAlign: 'right' }}>
+                              <Text size="10px" c="dimmed" lh={1}>Monthly budget</Text>
+                              <Text size="xs" c="dimmed">{formatCurrency(monthlyBudgetFor(cat))}</Text>
                             </div>
                             <div style={{ textAlign: 'right', minWidth: 60 }}>
                               <Text size="10px" c="dimmed" lh={1}>Balance</Text>

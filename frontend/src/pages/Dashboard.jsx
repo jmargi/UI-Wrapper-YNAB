@@ -156,7 +156,7 @@ function DrillDownModal({ opened, onClose, title, transactions }) {
 // Dashboard
 // ─────────────────────────────────────────────────────────────────────────────
 export default function Dashboard() {
-  const { transactions, accounts, loading, flatCategories } = useYNAB();
+  const { transactions, accounts, loading, flatCategories, budgetOverrides } = useYNAB();
   const [chartData, setChartData] = useState([]);
   const [drillType, setDrillType] = useState(null); // 'income' | 'expenses' | 'unapproved'
 
@@ -245,14 +245,18 @@ export default function Dashboard() {
     (flatCategories ?? [])
       .filter((c) => !c.hidden && !c.deleted && !EXCLUDED_GROUPS.has(c.groupName))
       .forEach((cat) => {
-        if (!map[cat.groupName]) map[cat.groupName] = { name: cat.groupName, budgeted: 0, balance: 0 };
+        if (!map[cat.groupName]) map[cat.groupName] = { name: cat.groupName, budgeted: 0, monthlyBudget: 0, balance: 0 };
         map[cat.groupName].budgeted += cat.budgeted;
+        // This app's own standing monthly budget reference (local override if
+        // set, else YNAB's this-month assigned amount) — can drift from
+        // "budgeted" since overrides never get pushed back to YNAB.
+        map[cat.groupName].monthlyBudget += budgetOverrides[cat.id] != null ? Math.abs(budgetOverrides[cat.id]) : Math.abs(cat.budgeted ?? 0);
         map[cat.groupName].balance  += cat.balance;
       });
     return Object.values(map)
       .filter((g) => g.balance > 0)          // only show groups with positive available
       .sort((a, b) => b.balance - a.balance); // largest available first
-  }, [flatCategories]);
+  }, [flatCategories, budgetOverrides]);
 
   const totalAvailable = pieGroups.reduce((s, g) => s + g.balance, 0); // milliunits
 
@@ -428,7 +432,8 @@ export default function Dashboard() {
                   <Table.Tr>
                     <Table.Th>Category Group</Table.Th>
                     <Table.Th ta="right">Available</Table.Th>
-                    <Table.Th ta="right">Budgeted</Table.Th>
+                    <Table.Th ta="right">Allocated this month</Table.Th>
+                    <Table.Th ta="right">Monthly budget</Table.Th>
                     <Table.Th ta="right">% of Available</Table.Th>
                   </Table.Tr>
                 </Table.Thead>
@@ -437,6 +442,7 @@ export default function Dashboard() {
                     const pct        = totalAvailable > 0 ? ((g.balance / totalAvailable) * 100).toFixed(1) : '0.0';
                     const avlDollars = g.balance / 1000;
                     const budDollars = g.budgeted / 1000;
+                    const monDollars = g.monthlyBudget / 1000;
                     return (
                       <Table.Tr key={g.name}>
                         <Table.Td>
@@ -450,6 +456,9 @@ export default function Dashboard() {
                         </Table.Td>
                         <Table.Td ta="right" c="dimmed">
                           ${budDollars.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                        </Table.Td>
+                        <Table.Td ta="right" c="dimmed">
+                          ${monDollars.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                         </Table.Td>
                         <Table.Td ta="right">
                           <Text size="xs" fw={600}>{pct}%</Text>
@@ -468,7 +477,10 @@ export default function Dashboard() {
                     ${(totalAvailable / 1000).toLocaleString('en-US', { minimumFractionDigits: 2 })} available
                   </Text>
                   <Text size="xs" c="dimmed">
-                    ${(pieGroups.reduce((s, g) => s + g.budgeted, 0) / 1000).toLocaleString('en-US', { minimumFractionDigits: 2 })} budgeted
+                    ${(pieGroups.reduce((s, g) => s + g.budgeted, 0) / 1000).toLocaleString('en-US', { minimumFractionDigits: 2 })} allocated this month
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    ${(pieGroups.reduce((s, g) => s + g.monthlyBudget, 0) / 1000).toLocaleString('en-US', { minimumFractionDigits: 2 })} monthly budget
                   </Text>
                   <Text size="xs" c="dimmed">100%</Text>
                 </Group>

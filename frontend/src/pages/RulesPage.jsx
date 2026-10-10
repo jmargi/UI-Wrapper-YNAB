@@ -3017,7 +3017,7 @@ export function MonthlyBudgetSummaryCard({ profiles }) {
             <Text fw={700} size="lg">${totalMonthlyIncome.toLocaleString('en-US', { minimumFractionDigits: 2 })}</Text>
           </div>
           <div>
-            <Text size="xs" c="dimmed" tt="uppercase" fw={600}>Total Budgeted (YNAB)</Text>
+            <Text size="xs" c="dimmed" tt="uppercase" fw={600}>Allocated this month (YNAB)</Text>
             <Text fw={700} size="lg">${totalMonthlyBudgeted.toLocaleString('en-US', { minimumFractionDigits: 2 })}</Text>
           </div>
         </Group>
