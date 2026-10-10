@@ -424,9 +424,9 @@ export default function CategoriesPage() {
           return (
             <Accordion.Item key={group.id || group.name} value={group.id || group.name}>
               <Accordion.Control>
-                <Group justify="space-between" pr="md" wrap="nowrap" gap="xs">
-                  <Text fw={600} lineClamp={1} style={{ flex: 1, minWidth: 0 }}>{group.name}</Text>
-                  <Group gap="md" wrap="nowrap" style={{ flexShrink: 0 }}>
+                <Group justify="space-between" pr="md" wrap="wrap" gap="xs">
+                  <Text fw={600} lineClamp={1} style={{ flex: '1 1 140px', minWidth: 0 }}>{group.name}</Text>
+                  <Group gap="md" wrap="wrap" style={{ flexShrink: 0 }}>
                     <div>
                       <Text size="xs" c="dimmed">Allocated this month</Text>
                       <Text size="sm" fw={500}>{formatCurrency(groupBudgeted)}</Text>
@@ -457,14 +457,14 @@ export default function CategoriesPage() {
 
                     return (
                       <div key={cat.id}>
-                        <Group justify="space-between" mb={4} wrap="nowrap">
-                          <Group gap="sm" style={{ flex: 1, minWidth: 0 }}>
+                        <Group justify="space-between" mb={4} wrap="wrap">
+                          <Group gap="sm" style={{ flex: '1 1 120px', minWidth: 0 }}>
                             <Text size="sm" lineClamp={1}>{cat.name}</Text>
                             {cat.goal_type && (
                               <Badge size="xs" variant="outline">{cat.goal_type}</Badge>
                             )}
                           </Group>
-                          <Group gap="md" wrap="nowrap" style={{ flexShrink: 0 }}>
+                          <Group gap="md" wrap="wrap" style={{ flexShrink: 0 }}>
                             <div style={{ textAlign: 'right' }}>
                               <Text size="10px" c="dimmed" lh={1}>Allocated this month</Text>
                               <Text size="xs" c="dimmed">{formatCurrency(budgeted)}</Text>
