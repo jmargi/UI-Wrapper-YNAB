@@ -41,6 +41,77 @@ html, body {
   }
 }
 
+/* ── Touch devices at ANY width ─────────────────────────────────────────────
+   An unfolded iPhone Duo (and iPads) are wider than the 48em phone breakpoint,
+   so they get the desktop layout — but they are still driven by a finger.
+   Everything here keys off the input device, not the screen width. */
+@media (pointer: coarse) {
+  /* iOS zooms the page when focusing an input under 16px; once zoomed, every
+     tap target is offset/tiny until you pinch back out. */
+  input, textarea, select,
+  .mantine-Input-input,
+  .mantine-Textarea-input,
+  .mantine-Select-input,
+  .mantine-NumberInput-input,
+  .mantine-PinInput-input,
+  .mantine-PasswordInput-input,
+  .mantine-DateInput-input,
+  .mantine-DatePickerInput-input,
+  .mantine-MonthPickerInput-input {
+    font-size: 16px !important;
+  }
+
+  /* No double-tap-to-zoom on controls: taps register immediately and a quick
+     second tap doesn't zoom the page out from under your finger. */
+  a, button, label, summary, input, select, textarea,
+  [role="button"], [role="tab"], [role="option"], [role="menuitem"],
+  .mantine-NavLink-root, .mantine-Table-td, .mantine-Table-th {
+    touch-action: manipulation;
+  }
+
+  * { -webkit-tap-highlight-color: transparent; }
+  html { -webkit-text-size-adjust: 100%; }
+
+  /* Enlarge the tappable area of small controls WITHOUT changing the layout:
+     an invisible pseudo-element extends past the visible button. (Both roots
+     are position:relative in Mantine.) */
+  .mantine-ActionIcon-root::after,
+  .mantine-Burger-root::after {
+    content: '';
+    position: absolute;
+    /* taller, barely wider: side-by-side icons (edit | delete) must never
+       overlap each other's visible button */
+    inset: -8px -2px;
+  }
+  .mantine-Burger-root { position: relative; }
+  .mantine-Button-root[data-size="xs"]::after,
+  .mantine-Button-root[data-size^="compact"]::after,
+  .mantine-Badge-root[style*="cursor"]::after {
+    content: '';
+    position: absolute;
+    inset: -7px -3px;
+  }
+  .mantine-Badge-root[style*="cursor"] { position: relative; }
+
+  /* Checkboxes / switches: 20px boxes are hard to hit */
+  .mantine-Checkbox-body, .mantine-Switch-body, .mantine-Radio-body {
+    padding: 6px;
+    margin: -6px;
+  }
+
+  .mantine-Modal-close, .mantine-Drawer-close {
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px !important;
+    min-height: 44px !important;
+  }
+
+  /* Rows of nav links / menu items / select options get finger-height */
+  .mantine-NavLink-root { min-height: 44px; }
+  .mantine-Menu-item, .mantine-Combobox-option { min-height: 40px; }
+  .mantine-Tabs-tab { min-height: 40px; }
+}
+
 @media (max-width: 48em) {
   /* Tighter horizontal padding so content doesn't waste 20%+ of screen width.
      Leave top/bottom alone — Mantine sets top to clear the fixed header. */
