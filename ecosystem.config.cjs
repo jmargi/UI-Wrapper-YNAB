@@ -16,9 +16,11 @@ module.exports = {
     },
     {
       name: 'ynab-frontend',
-      script: 'node_modules/.bin/vite',
-      args: '--host 0.0.0.0',
-      interpreter: 'node',
+      // Builds then serves the static bundle (vite preview reuses server.proxy
+      // and allowedHosts from vite.config.js). See frontend/serve.sh.
+      script: 'serve.sh',
+      interpreter: 'bash',
+      max_memory_restart: '300M',
       cwd: path.join(__dirname, 'frontend'),
       watch: false,
       env: { NODE_ENV: 'development' },
